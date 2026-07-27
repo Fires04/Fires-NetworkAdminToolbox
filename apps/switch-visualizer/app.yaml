@@ -1,10 +1,8 @@
 # pyftools app manifest. Every folder under apps/ that has one of these is
-# auto-discovered and reverse-proxied under /app/<folder-name>/ -- no central
-# registry to edit, same zero-config spirit as the cli_scripts/ tools.
-#
-# cmd supports {python} (sys.executable) and {port} (the assigned internal
-# port, bound to 127.0.0.1 only -- never exposed directly) placeholders.
+# auto-discovered and mounted directly in-process at /app/<folder-name> --
+# no central registry to edit, same zero-config spirit as the cli_scripts/
+# tools. "app" is "module.path:attribute", the ASGI application object to
+# mount (imported with this folder on sys.path).
 
 description: "Generate switch stack VLAN port-map images from CSV exports"
-port: 8001
-cmd: ["{python}", "-m", "uvicorn", "web.app:app", "--host", "127.0.0.1", "--port", "{port}"]
+app: "web.app:app"

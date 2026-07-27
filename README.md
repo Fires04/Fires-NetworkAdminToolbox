@@ -6,12 +6,19 @@ on one host:port:
 ```
 PyFTools/
   cli_scripts/     -- clidescribe-based CLI scripts (run, print output, exit)
-  apps/            -- full standalone web apps, one folder each
-  webui/           -- the Flask app that ties both together
+  apps/            -- full standalone ASGI web apps, one folder each
+  webui/           -- the FastAPI app that ties both together
 ```
 
 Both are drop-in-a-folder, zero-central-config: add a script or an app
 folder and it shows up in the UI automatically, no other code changes.
+
+Everything runs as **one process, one port**. `apps/` modules aren't
+spawned as child processes on their own ports and reverse-proxied over
+HTTP -- their ASGI application object is imported and mounted directly
+into the same process (`webui/mounts.py` + `app.mount(...)`), the same
+way you'd mount a router in any Starlette/FastAPI app. No subprocess
+supervision, no per-app port, no HTTP hop.
 
 ## `cli_scripts/`
 
@@ -61,33 +68,44 @@ while it keeps working normally on the command line.
 ## `apps/`
 
 Each subfolder of `apps/` with an `app.yaml` manifest is a full standalone
-web app (its own framework, own routes) that gets reverse-proxied under
-`/app/<folder-name>/` instead of auto-discovered like the CLI scripts --
-it's started on first request as a child process bound to `127.0.0.1` on
-its own internal port, so it appears under the toolbox's own address
-instead of a separate port.
+ASGI web app (its own routes, its own dependencies) that gets **mounted
+directly into the toolbox's own process** at `/app/<folder-name>/` --
+`webui/mounts.py` imports its application object and `webui/app.py` calls
+`app.mount(...)`, exactly like mounting a router in any FastAPI project.
+No child process, no extra port.
 
 `apps/switch-visualizer/` (from
 [NetworkAdminToolbox](https://github.com/Fires04/NetworkAdminToolbox)) is
-an example: a FastAPI/uvicorn app with its own `pyproject.toml`.
+an example: a FastAPI app (`web.app:app`) with its own `pyproject.toml`.
 
 ### Adding an app module
 
-1. Drop the project under `apps/<name>/`.
+1. Drop the project under `apps/<name>/`, with its own ASGI application
+   object exposed somewhere importable (e.g. `web/app.py` defining
+   `app = FastAPI(...)`).
 2. Add `apps/<name>/app.yaml`:
    ```yaml
    description: "One-line description shown on the toolbox card"
-   port: 8002                    # 127.0.0.1-only, pick one that's free
-   cmd: ["{python}", "-m", "uvicorn", "web.app:app",
-         "--host", "127.0.0.1", "--port", "{port}"]
+   app: "web.app:app"    # "module.path:attribute" -- the ASGI app object
    ```
-   `{python}` (sys.executable) and `{port}` are substituted at launch time.
 3. If it has its own dependencies, wire `pip install ./apps/<name>` (or its
    requirements file) into the `Dockerfile`.
 
-The proxy rewrites root-absolute path literals (`fetch('/x')`, `href="/x"`)
-in HTML responses so an app that assumes it's served from the domain root
-still works when mounted under `/app/<name>/`.
+A WSGI-only app (e.g. Flask/Django) can still be mounted by wrapping it in
+Starlette's `WSGIMiddleware` before returning it -- ASGI is the common
+denominator, not a requirement that every app be written against it.
+
+Since every app's entry-point module is imported into the same process,
+two apps that both happened to use an identically-named internal package
+(e.g. both had their own top-level `web` package) would collide in
+`sys.modules`. Not a concern with how few apps live here today; worth
+revisiting if it ever comes up.
+
+`webui/html_rewrite.py` rewrites root-absolute path literals (`fetch('/x')`,
+`href="/x"`) in an app's HTML responses so it still works when mounted
+under `/app/<name>/` instead of the domain root it assumes -- this is a
+property of reusing an app that assumes root deployment, not of how it's
+mounted, so it stays regardless of the in-process approach.
 
 ## Web UI
 
@@ -101,7 +119,8 @@ apps in separate sections, with a search box that filters both live.
 
 ### Docker
 
-The whole toolbox (CLI scripts + apps) builds into a single image:
+The whole toolbox (CLI scripts + apps) builds into a single image running
+a single process on a single port:
 
 ```
 docker build -t pyfnetwork-toolbox .

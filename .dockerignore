@@ -1,6 +1,5 @@
 .git
 **/__pycache__
 **/*.pyc
-/logs
 apps/switch-visualizer/testdata
 apps/switch-visualizer/scripts

@@ -1,10 +1,10 @@
-# PyFNetwork Toolbox -- one image, one process tree:
-# webui/app.py (Flask) serves the cli_scripts/ UI directly and reverse-proxies
-# each apps/<name>/ web app under /app/<name>/, spawning it as a child
-# process on a 127.0.0.1-only internal port on first request.
+# PyFNetwork Toolbox -- one image, one process, one port:
+# webui/app.py (FastAPI/uvicorn) serves the cli_scripts/ UI directly and
+# mounts each apps/<name>/ ASGI app in-process at /app/<name> (see
+# webui/mounts.py) -- no subprocess, no extra port, no HTTP proxy hop.
 FROM python:3.12-slim
 
-WORKDIR /app
+WORKDIR /srv/toolbox
 
 # fonts-dejavu-core: Pillow text rendering used by the switch-visualizer
 # app (Segoe UI isn't available on Linux).
@@ -21,8 +21,7 @@ RUN pip install --no-cache-dir -r webui/requirements.txt && \
 
 ENV PYTHONUNBUFFERED=1
 
-# Only the toolbox's own port is exposed -- apps/*/app.yaml internal ports
-# stay bound to 127.0.0.1 inside the container.
+# Just the one port -- every app is mounted in-process, nothing else to expose.
 EXPOSE 5000
 
 CMD ["python3", "webui/app.py"]

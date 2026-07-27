@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-webui/app.py - generic web front-end combining two module shapes into one
-toolbox:
+webui/app.py - single-process web front-end combining two module shapes
+into one toolbox, on one host:port:
 
 - cli_scripts/  -- clidescribe-based CLI scripts, auto-discovered via
   `--describe`; a form + run button + console output is generated for
-  each one automatically.
-- apps/         -- full standalone web apps, one per subfolder with an
-  app.yaml manifest, reverse-proxied under /app/<name>/ (see subapps.py).
+  each one automatically. Each run is a one-shot subprocess (there's no
+  long-running process to mount for a run-and-exit script).
+- apps/         -- full standalone ASGI web apps, one per subfolder with
+  an app.yaml manifest (see mounts.py), mounted directly at /app/<name>
+  in this same process -- no subprocess, no separate port, no HTTP proxy
+  hop. html_rewrite.py patches up the mounted app's own HTML so it still
+  works despite not being served from the domain root it assumes.
 
 Both are drop-in-a-folder, zero-central-config: add a script or an app
 folder and it shows up here with no other code changes.
@@ -17,16 +21,20 @@ Run:
 
 Then open http://127.0.0.1:5000/.
 """
+import asyncio
 import html
 import json
 import subprocess
 import sys
 from pathlib import Path
 
-from flask import Flask, Response, redirect, request, url_for
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
-import proxy
-from subapps import SubappManager
+from html_rewrite import RootPathRewrite
+from mounts import discover_apps
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = PROJECT_ROOT / "cli_scripts"
@@ -37,8 +45,12 @@ RUN_TIMEOUT = 60
 sys.path.insert(0, str(SCRIPTS_DIR))
 import clidescribe  # noqa: E402  (needs SCRIPTS_DIR on sys.path first)
 
-app = Flask(__name__)
-subapp_manager = SubappManager()
+app = FastAPI()
+app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "static"), name="static")
+
+APPS = discover_apps()
+for _name, _cfg in APPS.items():
+    app.mount(f"/app/{_name}", RootPathRewrite(_cfg["app"], f"/app/{_name}", _name))
 
 
 # ---------------------------------------------------------------------------
@@ -148,23 +160,23 @@ def _module_section(section_id, title, cards, empty_text):
 </section>"""
 
 
-def render_index(tools, subapps):
+def render_index(tools, apps):
     tool_cards = "".join(
         _tool_card(name, t["schema"].get("description", ""),
-                   url_for("tool_page", name=name), "CLI tool", "text-bg-secondary")
+                   f"/tool/{name}", "CLI tool", "text-bg-secondary")
         for name, t in tools.items()
     )
-    subapp_cards = "".join(
+    app_cards = "".join(
         _tool_card(name, cfg.get("description", ""), f"/app/{name}/", "Web app", "text-bg-info")
-        for name, cfg in subapps.items()
+        for name, cfg in apps.items()
     )
 
     sections = ""
     if tools:
         sections += _module_section("cli", "CLI tools", tool_cards, "No CLI tools match your search.")
-    if subapps:
-        sections += _module_section("apps", "Web apps", subapp_cards, "No web apps match your search.")
-    if not tools and not subapps:
+    if apps:
+        sections += _module_section("apps", "Web apps", app_cards, "No web apps match your search.")
+    if not tools and not apps:
         sections = '<p class="text-body-secondary fst-italic">No modules found.</p>'
 
     body = f"""
@@ -254,7 +266,7 @@ def _field_html(arg):
 def render_tool_page(name, schema):
     fields = "".join(_field_html(arg) for arg in schema["arguments"])
     body = f"""
-<p><a href="{url_for('index')}" class="link-secondary text-decoration-none">&larr; all tools</a></p>
+<p><a href="/" class="link-secondary text-decoration-none">&larr; all tools</a></p>
 <h1 class="h3">{html.escape(_display_name(name))}</h1>
 <p class="text-body-secondary">{html.escape(schema.get("description", ""))}</p>
 
@@ -330,29 +342,30 @@ form.addEventListener('submit', async function(e) {{
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.route("/")
+@app.get("/", response_class=HTMLResponse)
 def index():
-    return render_index(discover_tools(), subapp_manager.list_subapps())
+    return render_index(discover_tools(), APPS)
 
 
-@app.route("/tool/<name>")
-def tool_page(name):
+@app.get("/tool/{name}", response_class=HTMLResponse)
+def tool_page(name: str):
     tools = discover_tools()
     if name not in tools:
-        return redirect(url_for("index"))
+        return RedirectResponse("/")
     return render_tool_page(name, tools[name]["schema"])
 
 
-@app.route("/tool/<name>/run", methods=["POST"])
-def tool_run(name):
+def _run_tool_blocking(name, values):
+    """Everything here is blocking (subprocess.run, twice over) -- must run
+    off the event loop thread (see tool_run) or it stalls every other
+    request, including any concurrent one a running tool makes back into
+    this same server."""
     tools = discover_tools()
     if name not in tools:
         return {"ok": False, "cmdline": "", "output": f"unknown tool: {name}"}, 404
 
     schema = tools[name]["schema"]
     path = tools[name]["path"]
-    values = request.get_json(force=True, silent=True) or {}
-
     argv = clidescribe.build_argv(schema, values)
     full_cmd = [sys.executable, str(path)] + argv
 
@@ -368,42 +381,20 @@ def tool_run(name):
         "ok": ok,
         "cmdline": " ".join([Path(full_cmd[0]).name, path.name] + argv),
         "output": output,
-    }
+    }, 200
 
 
-@app.route("/app/<name>", defaults={"subpath": ""})
-@app.route("/app/<name>/", defaults={"subpath": ""})
-@app.route("/app/<name>/<path:subpath>", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-def subapp_proxy(name, subpath):
-    if name not in subapp_manager.subapps:
-        return redirect(url_for("index"))
-
-    try:
-        port = subapp_manager.ensure_running(name)
-    except RuntimeError as e:
-        return f"Failed to start sub-app '{name}': {e}", 502
-
-    target = f"http://127.0.0.1:{port}/{subpath}"
-    if request.query_string:
-        target += "?" + request.query_string.decode()
-
-    try:
-        body, status, headers = proxy.forward(request, target)
-    except OSError as e:
-        return f"Sub-app '{name}' unreachable: {e}", 502
-
-    header_map = {k.lower(): v for k, v in headers}
-    if header_map.get("content-type", "").startswith("text/html"):
-        body = proxy.rewrite_html(body, f"/app/{name}", name)
-
-    out_headers = [(k, v) for k, v in headers if k.lower() not in proxy.HOP_BY_HOP]
-    return Response(body, status=status, headers=out_headers)
+@app.post("/tool/{name}/run")
+async def tool_run(name: str, request: Request):
+    values = await request.json()
+    body, status = await asyncio.to_thread(_run_tool_blocking, name, values)
+    return JSONResponse(body, status_code=status)
 
 
 if __name__ == "__main__":
     print(f"Scanning tools in: {SCRIPTS_DIR}")
     for tool_name in discover_tools():
         print(f"  found: {tool_name}")
-    for subapp_name in subapp_manager.subapps:
-        print(f"  found sub-app: {subapp_name}")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    for app_name in APPS:
+        print(f"  found app: {app_name} (mounted at /app/{app_name})")
+    uvicorn.run(app, host="0.0.0.0", port=5000)
