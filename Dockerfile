@@ -6,10 +6,17 @@ FROM python:3.12-slim
 
 WORKDIR /srv/toolbox
 
-# fonts-dejavu-core: Pillow text rendering used by the switch-visualizer
-# app (Segoe UI isn't available on Linux).
+# fonts-dejavu-core: Pillow text rendering used by the switch-visualizer app
+#   (Segoe UI isn't available on Linux).
+# iputils-ping: protocol_tester.py's --ping shells out to the system `ping`
+#   binary, which python:3.12-slim doesn't ship.
+# traceroute, nmap: general network-diagnostic CLI tools available inside
+#   the container for ad-hoc use (docker exec), same reasoning as ping.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
+    iputils-ping \
+    traceroute \
+    nmap \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
