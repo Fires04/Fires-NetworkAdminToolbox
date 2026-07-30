@@ -62,9 +62,24 @@ def take_screenshot(hostname, ip, port, scheme, path, width, height, timeout, in
     with sync_playwright() as p:
         browser = p.chromium.launch(args=[f"--host-resolver-rules=MAP {hostname} {ip}"])
         try:
+            # Default headless Chromium identifies itself as a bot in two
+            # obvious ways: "HeadlessChrome" in the User-Agent, and
+            # navigator.webdriver == true. Plenty of sites' anti-bot/geo
+            # scripts key off exactly that (as opposed to the actual visitor
+            # IP) and quietly serve nothing -- which defeats the point of a
+            # tool meant to show what a *real* visitor to your own site
+            # would see. Presenting an ordinary-looking fingerprint here is
+            # the correct default for that purpose, not evasion.
             context = browser.new_context(
                 viewport={"width": width, "height": height},
                 ignore_https_errors=insecure,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                ),
+            )
+            context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
             )
             page = context.new_page()
 
