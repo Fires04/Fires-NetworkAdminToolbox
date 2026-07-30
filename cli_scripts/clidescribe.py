@@ -34,10 +34,13 @@ prints the JSON schema and exits, without running the tool's real logic or
 requiring any of its normally-mandatory arguments to be supplied.
 """
 import argparse
+import base64
 import json
 import sys
 
 DESCRIBE_FLAG = "--describe"
+IMAGE_MARKER_BEGIN = "##CLIDESCRIBE-IMAGE-BEGIN##"
+IMAGE_MARKER_END = "##CLIDESCRIBE-IMAGE-END##"
 
 
 def _field_type(action):
@@ -182,3 +185,35 @@ def build_argv(schema, values):
             flags.append(str(value))
 
     return flags + positionals
+
+
+def emit_image(data, mime="image/png"):
+    """Print `data` (raw image bytes) to stdout wrapped in a marker a web UI
+    can recognize and render as an <img>, instead of dumping binary/base64
+    into the plain-text console output. Any clidescribe-based tool can call
+    this -- it's a general convention, not specific to one tool.
+
+        png_bytes = page.screenshot()
+        clidescribe.emit_image(png_bytes)
+    """
+    encoded = base64.b64encode(data).decode("ascii")
+    print(IMAGE_MARKER_BEGIN)
+    print(f"data:{mime};base64,{encoded}")
+    print(IMAGE_MARKER_END)
+
+
+def extract_image(output):
+    """Inverse of emit_image(): pull the first image data URI out of a
+    tool's captured stdout/stderr, returning (remaining_text, data_uri_or_None).
+    Used by the web UI to separate console text from an image to render.
+    """
+    begin = output.find(IMAGE_MARKER_BEGIN)
+    if begin == -1:
+        return output, None
+    end = output.find(IMAGE_MARKER_END, begin)
+    if end == -1:
+        return output, None
+
+    data_uri = output[begin + len(IMAGE_MARKER_BEGIN):end].strip()
+    remaining = (output[:begin] + output[end + len(IMAGE_MARKER_END):]).strip()
+    return remaining, data_uri

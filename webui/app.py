@@ -323,7 +323,17 @@ form.addEventListener('submit', async function(e) {{
     cmd.style.display = 'block';
     badge.textContent = result.ok ? 'ok' : 'failed';
     badge.className = 'badge status-badge ' + (result.ok ? 'text-bg-success' : 'text-bg-danger');
-    out.textContent = result.output || '(no output)';
+
+    out.textContent = '';
+    if (result.image) {{
+      const img = document.createElement('img');
+      img.src = result.image;
+      img.className = 'img-fluid rounded border border-secondary-subtle mb-2';
+      out.appendChild(img);
+    }}
+    const pre = document.createElement('div');
+    pre.textContent = result.output || (result.image ? '' : '(no output)');
+    out.appendChild(pre);
   }} catch (err) {{
     badge.textContent = 'error';
     badge.className = 'badge text-bg-danger status-badge';
@@ -377,10 +387,13 @@ def _run_tool_blocking(name, values):
         output = f"(timed out after {RUN_TIMEOUT}s)"
         ok = False
 
+    output, image = clidescribe.extract_image(output)
+
     return {
         "ok": ok,
         "cmdline": " ".join([Path(full_cmd[0]).name, path.name] + argv),
         "output": output,
+        "image": image,
     }, 200
 
 

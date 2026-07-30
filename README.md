@@ -36,6 +36,29 @@ virtual host serves on a given backend before flipping DNS/a load
 balancer, without editing `/etc/hosts`:
 `virtual_host_tester.py example.com 10.0.0.5 -v`.
 
+`cli_scripts/virtual_host_screenshot.py` ("Virtual Host Screenshot" in the
+UI) - same idea, but renders the page in headless Chromium and returns a
+screenshot instead of raw headers/body, for when a text preview isn't
+enough (a JS-rendered app, a branded error page, ...). Uses Chromium's
+`--host-resolver-rules` flag rather than a custom HTTP client, so it's a
+real browser render, not just a fetch:
+`virtual_host_screenshot.py example.com 10.0.0.5 --full-page`.
+
+Needs Playwright + Chromium (`cli_scripts/requirements.txt` +
+`playwright install --with-deps chromium`, already wired into the
+`Dockerfile`) -- this is the one dependency in the project that isn't
+just Python stdlib, and it adds roughly 1GB to the image. Worth it only
+because this tool specifically needs a real rendering engine; don't reach
+for it as a default way to add tools here.
+
+### Tools that return an image
+
+A clidescribe-based tool can return an image instead of (or alongside)
+plain text: call `clidescribe.emit_image(png_bytes)` after computing it.
+The web UI (`webui/app.py`, via `clidescribe.extract_image`) picks this up
+automatically and renders it inline above the console text -- no
+tool-specific web code, same convention as everything else here.
+
 ### The `clidescribe` convention
 
 `cli_scripts/clidescribe.py` is a small, dependency-free helper any

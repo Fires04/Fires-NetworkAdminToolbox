@@ -26,6 +26,11 @@ COPY . .
 RUN pip install --no-cache-dir -r webui/requirements.txt && \
     pip install --no-cache-dir ./apps/switch-visualizer
 
+# virtual_host_screenshot.py needs a real browser -- installs Chromium plus
+# whatever system libraries it needs to actually render pages headlessly.
+RUN pip install --no-cache-dir -r cli_scripts/requirements.txt && \
+    playwright install --with-deps chromium
+
 ENV PYTHONUNBUFFERED=1
 
 # Just the one port -- every app is mounted in-process, nothing else to expose.
