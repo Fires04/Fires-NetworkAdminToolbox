@@ -36,6 +36,14 @@ virtual host serves on a given backend before flipping DNS/a load
 balancer, without editing `/etc/hosts`:
 `virtual_host_tester.py example.com 10.0.0.5 -v`.
 
+Follows redirects by default, printing a `⚠` warning at each hop instead
+of just reporting the `Location` header and stopping (the common case:
+plain HTTP redirecting to HTTPS). A hop that stays on the same hostname
+keeps using the IP override; a hop to a different hostname switches to
+normal DNS, since forcing an unrelated domain onto that IP would be
+misleading. `--no-follow-redirects` reports the first redirect without
+chasing it; `--max-redirects` caps how many hops to follow (default 5).
+
 `cli_scripts/virtual_host_screenshot.py` ("Virtual Host Screenshot" in the
 UI) - same idea, but renders the page in headless Chromium and returns a
 screenshot instead of raw headers/body, for when a text preview isn't
@@ -43,6 +51,11 @@ enough (a JS-rendered app, a branded error page, ...). Uses Chromium's
 `--host-resolver-rules` flag rather than a custom HTTP client, so it's a
 real browser render, not just a fetch:
 `virtual_host_screenshot.py example.com 10.0.0.5 --full-page`.
+
+Chromium follows redirects transparently as part of a normal page load;
+this walks the redirect chain Chromium hid and prints the same `⚠`
+warning per hop (e.g. the http->https upgrade) before the final
+screenshot, so it doesn't silently disappear into "it worked."
 
 Needs Playwright + Chromium (`cli_scripts/requirements.txt` +
 `playwright install --with-deps chromium`, already wired into the

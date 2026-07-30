@@ -21,6 +21,7 @@ import http.client
 import socket
 import ssl
 import sys
+import urllib.parse
 
 try:
     import clidescribe
@@ -91,24 +92,78 @@ def fetch(hostname, ip, port, scheme, path, method, timeout, insecure, data):
         conn.close()
 
 
-def print_result(hostname, ip, result, verbose):
+def follow_chain(hostname, ip, port, scheme, path, method, timeout, insecure, data, max_redirects):
+    """Fetch, and if the response is a redirect, keep following it -- printing
+    a warning at each hop -- instead of just reporting the Location header
+    and stopping. A hop that stays on the same hostname (the common
+    http->https upgrade) keeps using the IP override; a hop to a different
+    hostname falls back to normal DNS, since forcing an unrelated domain
+    onto this IP would be misleading rather than useful.
+    """
+    warnings = []
+    cur_host, cur_ip, cur_port, cur_scheme, cur_path = hostname, ip, port, scheme, path
+    cur_method, cur_data = method, data
+
+    for hop in range(max_redirects + 1):
+        result = fetch(cur_host, cur_ip, cur_port, cur_scheme, cur_path, cur_method, timeout, insecure, cur_data)
+        if not result["ok"] or not (300 <= result["status"] < 400):
+            return result, warnings, (cur_host, cur_ip)
+
+        location = dict(result["headers"]).get("Location")
+        if not location:
+            return result, warnings, (cur_host, cur_ip)
+
+        if max_redirects == 0:
+            warnings.append(f"redirects to: {location} (not following, --no-follow-redirects)")
+            return result, warnings, (cur_host, cur_ip)
+
+        if hop == max_redirects:
+            warnings.append(f"stopped after {max_redirects} redirects (still redirecting to {location})")
+            return result, warnings, (cur_host, cur_ip)
+
+        base = f"{cur_scheme}://{cur_host}{cur_path}"
+        target = urllib.parse.urlparse(urllib.parse.urljoin(base, location))
+        new_host = target.hostname or cur_host
+        new_scheme = target.scheme or cur_scheme
+        new_port = target.port or (443 if new_scheme == "https" else 80)
+        new_path = target.path or "/"
+        if target.query:
+            new_path += "?" + target.query
+
+        warnings.append(f"redirected ({result['status']}) {cur_scheme}://{cur_host}{cur_path} -> {location}")
+
+        if new_host == cur_host:
+            new_ip = cur_ip
+        else:
+            new_ip = new_host  # different host -- let normal DNS resolve it instead of forcing our IP
+            warnings.append(f"redirect target host differs ({new_host}) -- switching to normal DNS resolution")
+
+        cur_host, cur_ip, cur_port, cur_scheme, cur_path = new_host, new_ip, new_port, new_scheme, new_path
+        cur_method, cur_data = ("GET" if result["status"] in (301, 302, 303) else cur_method), (None if result["status"] in (301, 302, 303) else cur_data)
+
+    return result, warnings, (cur_host, cur_ip)
+
+
+def print_result(hostname, ip, result, warnings, final_target, verbose):
     label = f"{hostname} @ {ip}"
+    for w in warnings:
+        print(f"  ⚠ {w}")
+
     if not result["ok"]:
         print(f"{label:<40} [FAIL] {result['error']}")
         return False
 
     status, reason = result["status"], result["reason"]
     tag = "OK  " if status < 400 else "FAIL"
-    print(f"{label:<40} [{tag}] HTTP {status} {reason}")
+    if final_target != (hostname, ip):
+        print(f"{label:<40} [{tag}] HTTP {status} {reason}  (final: {final_target[0]} @ {final_target[1]})")
+    else:
+        print(f"{label:<40} [{tag}] HTTP {status} {reason}")
 
     if result["cert"]:
         subject = dict(x[0] for x in result["cert"].get("subject", []))
         san = [v for k, v in result["cert"].get("subjectAltName", []) if k == "DNS"]
         print(f"  cert subject: {subject.get('commonName', '?')}  SAN: {', '.join(san) or '-'}")
-
-    location = dict(result["headers"]).get("Location")
-    if location:
-        print(f"  redirects to: {location}")
 
     if verbose:
         print("  headers:")
@@ -148,6 +203,10 @@ def build_parser():
                          help="timeout in seconds (default: 5)")
     parser.add_argument("--insecure", action="store_true",
                          help="skip TLS certificate verification (self-signed / not-yet-cutover certs)")
+    parser.add_argument("--no-follow-redirects", action="store_true",
+                         help="report a redirect instead of following it (default: follow, with a warning per hop)")
+    parser.add_argument("--max-redirects", type=int, default=5,
+                         help="maximum redirects to follow (default: 5)")
     parser.add_argument("-v", "--verbose", action="store_true",
                          help="show response headers and a body preview")
     if clidescribe:
@@ -163,10 +222,13 @@ def main():
 
     port = args.port if args.port is not None else (443 if args.scheme == "https" else 80)
     data = args.data.encode() if args.data else None
+    max_redirects = 0 if args.no_follow_redirects else args.max_redirects
 
-    result = fetch(args.hostname, args.ip, port, args.scheme, args.path,
-                    args.method, args.timeout, args.insecure, data)
-    ok = print_result(args.hostname, args.ip, result, args.verbose)
+    result, warnings, final_target = follow_chain(
+        args.hostname, args.ip, port, args.scheme, args.path,
+        args.method, args.timeout, args.insecure, data, max_redirects,
+    )
+    ok = print_result(args.hostname, args.ip, result, warnings, final_target, args.verbose)
     sys.exit(0 if ok else 1)
 
 

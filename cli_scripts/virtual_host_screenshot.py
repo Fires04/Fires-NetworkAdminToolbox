@@ -33,6 +33,29 @@ except ImportError:
     sync_playwright = None
 
 
+def _redirect_warnings(response):
+    """Chromium follows redirects transparently during navigation -- walk the
+    chain back from the final response's request (via .redirected_from) so
+    the ones it hid, e.g. the classic http->https upgrade, still show up as
+    a warning instead of silently vanishing into the final screenshot."""
+    if response is None:
+        return []
+    hops = []
+    req = response.request
+    while req.redirected_from:
+        hops.append(req.redirected_from)
+        req = req.redirected_from
+    hops.reverse()
+
+    warnings = []
+    for hop in hops:
+        hop_resp = hop.response()
+        status = hop_resp.status if hop_resp else "?"
+        to_url = hop.redirected_to.url if hop.redirected_to else "?"
+        warnings.append(f"redirected ({status}) {hop.url} -> {to_url}")
+    return warnings
+
+
 def take_screenshot(hostname, ip, port, scheme, path, width, height, timeout, insecure, full_page):
     url = f"{scheme}://{hostname}:{port}{path}" if port not in (80, 443) else f"{scheme}://{hostname}{path}"
 
@@ -45,6 +68,7 @@ def take_screenshot(hostname, ip, port, scheme, path, width, height, timeout, in
             )
             page = context.new_page()
             response = page.goto(url, timeout=timeout * 1000, wait_until="load")
+            warnings = _redirect_warnings(response)
             png_bytes = page.screenshot(full_page=full_page)
             status = response.status if response else None
             final_url = page.url
@@ -52,7 +76,7 @@ def take_screenshot(hostname, ip, port, scheme, path, width, height, timeout, in
         finally:
             browser.close()
 
-    return status, final_url, title, png_bytes
+    return status, final_url, title, png_bytes, warnings
 
 
 def build_parser():
@@ -96,13 +120,16 @@ def main():
     port = args.port if args.port is not None else (443 if args.scheme == "https" else 80)
 
     try:
-        status, final_url, title, png_bytes = take_screenshot(
+        status, final_url, title, png_bytes, warnings = take_screenshot(
             args.hostname, args.ip, port, args.scheme, args.path,
             args.width, args.height, args.timeout, args.insecure, args.full_page,
         )
     except Exception as e:
         print(f"{args.hostname} @ {args.ip:<15} [FAIL] {e}")
         sys.exit(1)
+
+    for w in warnings:
+        print(f"  ⚠ {w}")
 
     tag = "OK  " if status and status < 400 else "FAIL"
     print(f"{args.hostname} @ {args.ip:<15} [{tag}] HTTP {status} -- {title!r}")
