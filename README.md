@@ -29,6 +29,13 @@ Modbus TCP, DNS, NTP, or plain TCP), not just whether a port is open. See
 `protocol_tester.py --protocols` for the full list, and `-h` for all
 options.
 
+`cli_scripts/virtual_host_tester.py` ("Virtual Host Tester" in the UI) -
+fetches a URL from a specific IP while sending a different Host header
+(and TLS SNI), the same trick `curl --resolve` uses. For testing what a
+virtual host serves on a given backend before flipping DNS/a load
+balancer, without editing `/etc/hosts`:
+`virtual_host_tester.py example.com 10.0.0.5 -v`.
+
 ### The `clidescribe` convention
 
 `cli_scripts/clidescribe.py` is a small, dependency-free helper any
