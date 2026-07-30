@@ -67,8 +67,39 @@ def take_screenshot(hostname, ip, port, scheme, path, width, height, timeout, in
                 ignore_https_errors=insecure,
             )
             page = context.new_page()
+
+            # A page that looks broken/unstyled in the screenshot is usually
+            # missing an asset -- either it 404'd/500'd on *this* backend, or
+            # it lives on a different hostname that our IP override doesn't
+            # apply to and so didn't resolve. Both are exactly the kind of
+            # thing this tool exists to catch, so surface them as warnings
+            # instead of leaving "why does this look broken" a mystery.
+            #
+            # A resource that 404s/500s also fires requestfailed right after
+            # (Chromium aborts loading it as a stylesheet/script/etc.) -- key
+            # both by URL so that duplicate is collapsed into the one with
+            # the actual HTTP status, keeping requestfailed only for hops
+            # that never got a response at all (DNS failure, connection
+            # refused, ...).
+            response_warnings = {}
+            failed_warnings = {}
+            page.on("response", lambda resp: response_warnings.setdefault(
+                resp.url, f"{resp.status} {resp.url}"
+            ) if resp.status >= 400 else None)
+            page.on("requestfailed", lambda req: failed_warnings.setdefault(
+                req.url, f"failed to load {req.url} ({req.failure or 'unknown error'})"
+            ))
+
             response = page.goto(url, timeout=timeout * 1000, wait_until="load")
-            warnings = _redirect_warnings(response)
+            # A short settle window catches near-immediate background
+            # requests/animations that fire right after "load" without
+            # resorting to Playwright's flaky "networkidle" wait strategy.
+            page.wait_for_timeout(500)
+
+            asset_warnings = list(response_warnings.values()) + [
+                w for url, w in failed_warnings.items() if url not in response_warnings
+            ]
+            warnings = _redirect_warnings(response) + asset_warnings
             png_bytes = page.screenshot(full_page=full_page)
             status = response.status if response else None
             final_url = page.url

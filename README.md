@@ -57,6 +57,13 @@ this walks the redirect chain Chromium hid and prints the same `⚠`
 warning per hop (e.g. the http->https upgrade) before the final
 screenshot, so it doesn't silently disappear into "it worked."
 
+Also warns about any failed/4xx/5xx subresource (stylesheet, script,
+image, ...) -- a page that renders broken/unstyled on a given backend is
+usually a 404 there, or an asset on a different hostname our IP override
+doesn't apply to. `[OK] HTTP 200` alone doesn't mean the page actually
+looks right; these warnings are what explain a broken-looking screenshot
+instead of leaving it a mystery.
+
 Needs Playwright + Chromium (`cli_scripts/requirements.txt` +
 `playwright install --with-deps chromium`, already wired into the
 `Dockerfile`) -- this is the one dependency in the project that isn't
