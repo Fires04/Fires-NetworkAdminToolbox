@@ -26,7 +26,8 @@ def normalize_to_pem_blocks(raw: bytes):
     exported chain file is just this) or a single DER-encoded certificate.
     Returns a list of PEM blocks, in whatever order they were given -- chain
     building doesn't assume leaf-first, it works the real order out from
-    issuer/subject relationships.
+    issuer/subject relationships. Does NOT handle PKCS#12 (.pfx/.p12) --
+    those need a password, see extract_pkcs12_certs.
     """
     text = raw.decode("utf-8", errors="ignore")
     blocks = _PEM_RE.findall(text)
@@ -39,6 +40,54 @@ def normalize_to_pem_blocks(raw: bytes):
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     return _PEM_RE.findall(proc.stdout.decode(errors="replace"))
+
+
+def extract_pkcs12_certs(raw: bytes, password: str = ""):
+    """Extract every certificate (leaf + any chain certs bundled alongside
+    it) from a PKCS#12 (.pfx/.p12) container -- the common Windows/IIS
+    export format, which bundles the private key together with the cert(s)
+    behind a password, in a binary structure `openssl x509` can't read
+    directly.
+
+    The password goes in over stdin (`-passin stdin`), not as a `-passin
+    pass:...` argument, so it never shows up in this process's argv (e.g.
+    to another local user running `ps aux` during the brief subprocess
+    call).
+
+    OpenSSL 3.x refuses by default to read older PKCS#12 files encrypted
+    with RC2/3DES (still common from older Windows/Java tooling) unless
+    `-legacy` is passed; this tries the modern default first and only
+    retries with `-legacy` if that comes back empty.
+
+    Raises RuntimeError (wrong password, corrupt file, not PKCS#12 at all)
+    with openssl's own message if nothing could be extracted.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        pfx_path = Path(d) / "in.pfx"
+        pfx_path.write_bytes(raw)
+        base_args = ["openssl", "pkcs12", "-in", str(pfx_path), "-nokeys", "-passin", "stdin"]
+        stdin = (password + "\n").encode()
+
+        try:
+            proc = _run(base_args, input_bytes=stdin)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            raise RuntimeError(str(e))
+        blocks = _PEM_RE.findall(proc.stdout.decode(errors="replace"))
+        if blocks:
+            return blocks
+
+        try:
+            proc = _run(base_args + ["-legacy"], input_bytes=stdin)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            raise RuntimeError(str(e))
+        out = proc.stdout.decode(errors="replace")
+        blocks = _PEM_RE.findall(out)
+        if blocks:
+            return blocks
+
+    raise RuntimeError(
+        "could not read this as a PKCS#12 (.pfx/.p12) file -- "
+        + (f"wrong password? ({out.strip()[-200:]})" if out.strip() else "wrong password or corrupt file"))
 
 
 def _field(text, name):

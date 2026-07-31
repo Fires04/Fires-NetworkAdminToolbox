@@ -42,6 +42,7 @@
   }
   button:hover { filter: brightness(1.08); }
   button.secondary { background: #2a2f36; color: var(--text); border: 1px solid var(--border); }
+  button.live { background: var(--ok); color: #06210d; }
   .divider { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .8rem; margin: 1.3rem 0 .2rem; }
   .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
   .row { display: flex; gap: .5rem; }
@@ -97,13 +98,16 @@
   <div id="inputPanel" class="panel">
     <label>Certificate file(s)</label>
     <div id="dropzone">
-      Drop a .pem / .crt / .cer / .der file here<br>(or a full chain bundle)<br>or click to browse
+      Drop a .pem / .crt / .cer / .der / .pfx / .p12 file here<br>(or a full chain bundle)<br>or click to browse
       <div class="fname" id="fname"></div>
     </div>
     <input type="file" id="fileInput" multiple style="display:none">
 
     <label>...or paste PEM text</label>
     <textarea id="pemText" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+
+    <label>PFX/P12 password <span style="color:var(--muted)">(only needed for those, leave blank otherwise)</span></label>
+    <input type="password" id="pfxPassword" placeholder="" autocomplete="off">
 
     <label>Expected hostname <span style="color:var(--muted)">(optional)</span></label>
     <input type="text" id="expectHost" placeholder="example.com">
@@ -116,7 +120,7 @@
       <input type="text" id="liveHost" placeholder="example.com">
       <input type="number" id="livePort" placeholder="443" style="flex:0 0 90px">
     </div>
-    <button class="secondary" id="checkBtn">Fetch &amp; test live chain</button>
+    <button class="live" id="checkBtn">Fetch &amp; test live chain</button>
 
     <div id="status"></div>
   </div>
@@ -162,6 +166,7 @@ document.getElementById('parseBtn').addEventListener('click', async () => {
   for (const f of fileInput.files) fd.append('files', f);
   fd.append('pem_text', document.getElementById('pemText').value);
   fd.append('hostname', document.getElementById('expectHost').value);
+  fd.append('password', document.getElementById('pfxPassword').value);
   if (!fileInput.files.length && !document.getElementById('pemText').value.trim()) {
     setStatus('drop a file or paste PEM text first', true);
     return;
@@ -169,13 +174,20 @@ document.getElementById('parseBtn').addEventListener('click', async () => {
   await run('api/parse', fd);
 });
 
-document.getElementById('checkBtn').addEventListener('click', async () => {
+async function runLiveCheck() {
   const host = document.getElementById('liveHost').value.trim();
   if (!host) { setStatus('enter a hostname first', true); return; }
   const fd = new FormData();
   fd.append('hostname', host);
   fd.append('port', document.getElementById('livePort').value || '443');
   await run('api/check', fd);
+}
+
+document.getElementById('checkBtn').addEventListener('click', runLiveCheck);
+['liveHost', 'livePort'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); runLiveCheck(); }
+  });
 });
 
 async function run(url, fd) {

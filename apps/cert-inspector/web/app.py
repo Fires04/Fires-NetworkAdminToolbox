@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from cert_inspector.parser import (
     build_chains,
     describe_cert,
+    extract_pkcs12_certs,
     fetch_chain_from_host,
     hostname_matches,
     normalize_to_pem_blocks,
@@ -60,18 +61,28 @@ def _build_result(pem_blocks, expected_hostname=None, live_extra=None, verify_lo
             elif c.get("not_yet_valid"):
                 warnings.append(f"[{idx}] {c.get('subject')}: not yet valid")
 
-        top = certs[chain[-1]]
-        if not top.get("self_signed") and not top.get("parse_error"):
-            warnings.append(
-                f"chain ending at index {chain[-1]} is incomplete: no certificate for issuer "
-                f"'{top.get('issuer')}' was included (fine if that's a trusted root you just "
-                f"didn't upload; a real problem if it's a missing intermediate)")
-
         if verify_locally:
             entry["local_verify"] = verify_chain_locally(
                 pem_blocks[chain[0]], [pem_blocks[i] for i in chain[1:]])
             if entry["local_verify"]["ok"] is False:
                 warnings.append(f"chain at index {chain[0]}: system trust verification failed")
+            chain_trusted = entry["local_verify"]["ok"] is True
+        else:
+            chain_trusted = bool(live_extra and live_extra.get("verify_ok"))
+
+        # A server is only supposed to send the leaf + intermediates -- the
+        # root is expected to already be in the client's trust store, not
+        # sent over the wire, so "the chain we were handed doesn't include a
+        # root" is completely normal and not itself a problem. Only surface
+        # it as a warning when we *also* know trust verification didn't
+        # actually succeed (missing intermediate, untrusted root, etc.) --
+        # otherwise it's just noise on top of a perfectly fine chain.
+        top = certs[chain[-1]]
+        if not top.get("self_signed") and not top.get("parse_error") and not chain_trusted:
+            warnings.append(
+                f"chain ending at index {chain[-1]} is incomplete: no certificate for issuer "
+                f"'{top.get('issuer')}' was included, and chain verification did not succeed -- "
+                f"likely a missing intermediate")
 
         chains_out.append(entry)
 
@@ -86,16 +97,35 @@ async def api_parse(
     files: Annotated[list[UploadFile], File()] = [],
     pem_text: Annotated[str, Form()] = "",
     hostname: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
 ):
-    raw = pem_text.encode()
-    for f in files:
-        if f.filename:
-            raw += b"\n" + await f.read()
+    # b"\n".join (not unconditional concatenation) so a single uploaded
+    # file's bytes pass through completely unmodified -- prepending a
+    # separator before binary content (DER, PKCS#12) corrupts its ASN.1
+    # structure, even though it's harmless/needed between PEM text blocks.
+    file_contents = [await f.read() for f in files if f.filename]
+    parts = ([pem_text.encode()] if pem_text else []) + file_contents
+    raw = b"\n".join(parts)
 
     pem_blocks = normalize_to_pem_blocks(raw)
+    pkcs12_error = None
+    if not pem_blocks and raw.strip():
+        # Not PEM text and not a bare DER certificate -- the remaining
+        # likely case for binary input is a PKCS#12 (.pfx/.p12) bundle.
+        # Try each uploaded file's own exact bytes (not the joined blob --
+        # PKCS#12 is one binary structure, it doesn't concatenate like PEM).
+        for content in (file_contents or [raw]):
+            try:
+                pem_blocks = extract_pkcs12_certs(content, password)
+                pkcs12_error = None
+                break
+            except RuntimeError as e:
+                pkcs12_error = str(e)
+
     if not pem_blocks:
         return JSONResponse(
-            {"error": "no certificate found (drop a PEM/DER file, a PEM bundle, or paste PEM text)"},
+            {"error": pkcs12_error or
+             "no certificate found (drop a PEM/DER/PFX file, a PEM bundle, or paste PEM text)"},
             status_code=400,
         )
     return _build_result(pem_blocks, expected_hostname=hostname or None, verify_locally=True)
