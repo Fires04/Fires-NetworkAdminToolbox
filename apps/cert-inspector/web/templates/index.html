@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Certificate Inspector</title>
+<style>
+  :root {
+    --bg: #16181c; --panel: #1f2328; --border: #343a40; --text: #e9ecef;
+    --muted: #8d97a1; --accent: #4dabf7; --ok: #51cf66; --warn: #ffa94d; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .subtitle { color: var(--muted); margin: 0 0 1.25rem; font-size: .92rem; }
+  .layout { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem;
+  }
+  #inputPanel { width: 340px; flex-shrink: 0; }
+  #results { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 1rem; }
+  label { display: block; font-size: .82rem; color: var(--muted); margin: .9rem 0 .3rem; }
+  label:first-of-type { margin-top: 0; }
+  input[type=text], input[type=number], textarea {
+    width: 100%; background: #14171a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: .45rem .55rem; font: inherit;
+  }
+  textarea { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: .78rem; resize: vertical; }
+  #dropzone {
+    border: 2px dashed var(--border); border-radius: 8px; padding: 1.4rem .8rem;
+    text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
+  }
+  #dropzone.drag { border-color: var(--accent); color: var(--accent); background: #1a2734; }
+  #dropzone .fname { color: var(--text); font-size: .85rem; margin-top: .3rem; word-break: break-all; }
+  button {
+    background: var(--accent); color: #06202f; border: none; border-radius: 6px;
+    padding: .55rem .9rem; font-weight: 600; cursor: pointer; width: 100%; margin-top: .8rem;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.secondary { background: #2a2f36; color: var(--text); border: 1px solid var(--border); }
+  .divider { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .8rem; margin: 1.3rem 0 .2rem; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .row { display: flex; gap: .5rem; }
+  .row > * { flex: 1; }
+  #status { font-size: .85rem; color: var(--muted); min-height: 1.2em; margin-top: .5rem; }
+  #status.err { color: var(--bad); }
+
+  .warnbox { border: 1px solid var(--bad); background: #2a1414; border-radius: 8px; padding: .8rem 1rem; }
+  .warnbox h3 { margin: 0 0 .4rem; font-size: .9rem; color: var(--bad); }
+  .warnbox ul { margin: 0; padding-left: 1.1rem; font-size: .85rem; }
+
+  .infobox { display: flex; gap: 1.2rem; flex-wrap: wrap; font-size: .85rem; color: var(--muted); }
+  .infobox b { color: var(--text); }
+
+  .chain-block { display: flex; flex-direction: column; align-items: flex-start; }
+  .chain-node {
+    display: flex; align-items: center; gap: .6rem; border: 1px solid var(--border);
+    border-radius: 8px; padding: .55rem .8rem; cursor: pointer; background: #1a1e23; min-width: 260px;
+  }
+  .chain-node:hover { border-color: var(--accent); }
+  .pill { font-size: .7rem; font-weight: 700; padding: .12rem .5rem; border-radius: 99px; white-space: nowrap; }
+  .pill-ok { background: rgba(81,207,102,.15); color: var(--ok); }
+  .pill-soon { background: rgba(255,169,77,.15); color: var(--warn); }
+  .pill-bad { background: rgba(255,107,107,.15); color: var(--bad); }
+  .pill-unknown { background: rgba(141,151,161,.15); color: var(--muted); }
+  .chain-node .cn { font-weight: 600; font-size: .88rem; }
+  .chain-node .sub { font-size: .76rem; color: var(--muted); }
+  .arrow { color: var(--muted); font-size: .78rem; padding: .15rem 0 .15rem 1.6rem; }
+  .chain-verify { font-size: .78rem; margin-top: .4rem; padding-left: .2rem; }
+  .chain-verify.ok { color: var(--ok); } .chain-verify.bad { color: var(--bad); }
+
+  .cert-card { display: flex; flex-direction: column; gap: .35rem; }
+  .cert-card h4 { margin: 0 0 .2rem; font-size: .95rem; display: flex; align-items: center; gap: .5rem; }
+  dl.fields { display: grid; grid-template-columns: 150px 1fr; gap: .25rem .8rem; margin: 0; font-size: .82rem; }
+  dl.fields dt { color: var(--muted); }
+  dl.fields dd { margin: 0; word-break: break-word; }
+  details { margin-top: .5rem; }
+  details summary { cursor: pointer; color: var(--accent); font-size: .82rem; }
+  details pre {
+    white-space: pre-wrap; font-size: .74rem; background: #101214; border: 1px solid var(--border);
+    border-radius: 6px; padding: .6rem; margin-top: .4rem; max-height: 400px; overflow: auto;
+  }
+  .empty { color: var(--muted); font-size: .9rem; padding: 2rem 0; text-align: center; }
+  @media (max-width: 760px) { #inputPanel { width: 100%; } }
+</style>
+</head>
+<body>
+
+<h1>Certificate Inspector</h1>
+<p class="subtitle">Drag &amp; drop a certificate or full chain bundle, paste PEM text, or test a live host -- full chain, visual diagram, everything useful for debugging a TLS problem.</p>
+
+<div class="layout">
+  <div id="inputPanel" class="panel">
+    <label>Certificate file(s)</label>
+    <div id="dropzone">
+      Drop a .pem / .crt / .cer / .der file here<br>(or a full chain bundle)<br>or click to browse
+      <div class="fname" id="fname"></div>
+    </div>
+    <input type="file" id="fileInput" multiple style="display:none">
+
+    <label>...or paste PEM text</label>
+    <textarea id="pemText" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+
+    <label>Expected hostname <span style="color:var(--muted)">(optional)</span></label>
+    <input type="text" id="expectHost" placeholder="example.com">
+
+    <button id="parseBtn">Parse certificate(s)</button>
+
+    <div class="divider">or test a live host</div>
+    <label>Hostname</label>
+    <div class="row">
+      <input type="text" id="liveHost" placeholder="example.com">
+      <input type="number" id="livePort" placeholder="443" style="flex:0 0 90px">
+    </div>
+    <button class="secondary" id="checkBtn">Fetch &amp; test live chain</button>
+
+    <div id="status"></div>
+  </div>
+
+  <div id="results">
+    <div class="empty">Drop a certificate, paste one, or test a live host to see results here.</div>
+  </div>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fname = document.getElementById('fname');
+const statusEl = document.getElementById('status');
+const results = document.getElementById('results');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; updateFname(); }
+});
+fileInput.addEventListener('change', updateFname);
+
+function updateFname() {
+  const names = Array.from(fileInput.files).map(f => f.name);
+  fname.textContent = names.join(', ');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function setStatus(msg, isErr) {
+  statusEl.textContent = msg || '';
+  statusEl.className = isErr ? 'err' : '';
+}
+
+document.getElementById('parseBtn').addEventListener('click', async () => {
+  const fd = new FormData();
+  for (const f of fileInput.files) fd.append('files', f);
+  fd.append('pem_text', document.getElementById('pemText').value);
+  fd.append('hostname', document.getElementById('expectHost').value);
+  if (!fileInput.files.length && !document.getElementById('pemText').value.trim()) {
+    setStatus('drop a file or paste PEM text first', true);
+    return;
+  }
+  await run('api/parse', fd);
+});
+
+document.getElementById('checkBtn').addEventListener('click', async () => {
+  const host = document.getElementById('liveHost').value.trim();
+  if (!host) { setStatus('enter a hostname first', true); return; }
+  const fd = new FormData();
+  fd.append('hostname', host);
+  fd.append('port', document.getElementById('livePort').value || '443');
+  await run('api/check', fd);
+});
+
+async function run(url, fd) {
+  setStatus('Working…');
+  try {
+    const resp = await fetch(url, {method: 'POST', body: fd});
+    const data = await resp.json();
+    if (!resp.ok) { setStatus(data.error || 'request failed', true); return; }
+    setStatus('');
+    render(data);
+  } catch (err) {
+    setStatus(String(err), true);
+  }
+}
+
+function certStatus(c) {
+  if (c.parse_error) return 'unknown';
+  if (c.expired || c.not_yet_valid) return 'bad';
+  if (c.valid_now === true) return (c.days_left !== null && c.days_left < 14) ? 'soon' : 'ok';
+  return 'unknown';
+}
+
+function shortName(dn) {
+  if (!dn) return '(unknown)';
+  const m = dn.match(/CN\s*=\s*([^,]+)/i);
+  return m ? m[1].trim() : dn;
+}
+
+function render(data) {
+  const certs = data.certs;
+  const parts = [];
+
+  if (data.warnings && data.warnings.length) {
+    parts.push(`<div class="warnbox"><h3>⚠ ${data.warnings.length} issue(s) found</h3><ul>${
+      data.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>`);
+  }
+
+  if (data.tls_version) {
+    parts.push(`<div class="panel infobox">
+      <div><b>TLS</b> ${esc(data.tls_version)}</div>
+      <div><b>Cipher</b> ${esc(data.cipher || '?')}</div>
+      <div><b>System trust</b> ${data.verify_ok
+        ? '<span style="color:var(--ok)">OK</span>'
+        : `<span style="color:var(--bad)">FAILED${data.verify_message ? ': ' + esc(data.verify_message) : ''}</span>`}</div>
+    </div>`);
+  }
+
+  data.chains.forEach((chain, ci) => {
+    const nodes = chain.indices.map((idx, i) => {
+      const c = certs[idx];
+      const st = certStatus(c);
+      const label = st === 'bad' ? (c.expired ? `EXPIRED ${-c.days_left}d ago` : 'NOT YET VALID')
+        : st === 'soon' ? `${c.days_left}d left`
+        : st === 'ok' ? `${c.days_left}d left` : (c.parse_error ? 'parse error' : 'unknown');
+      const isTop = i === chain.indices.length - 1;
+      const tag = isTop ? (c.self_signed ? ' · self-signed root' : ' · ⚠ issuer not included') : '';
+      const arrow = i > 0 ? `<div class="arrow">↑ issued by</div>` : '';
+      return `${arrow}<div class="chain-node" onclick="document.getElementById('cert-${idx}').scrollIntoView({behavior:'smooth',block:'center'})">
+        <span class="pill pill-${st}">${esc(label)}</span>
+        <div><div class="cn">[${idx}] ${esc(shortName(c.subject))}</div><div class="sub">${esc(shortName(c.issuer))}${tag}</div></div>
+      </div>`;
+    }).join('');
+
+    let verifyLine = '';
+    if (chain.local_verify) {
+      const ok = chain.local_verify.ok;
+      verifyLine = `<div class="chain-verify ${ok ? 'ok' : 'bad'}">System trust verify: ${
+        ok ? 'OK' : 'FAILED'} <details style="display:inline"><summary style="display:inline">details</summary><pre>${esc(chain.local_verify.message)}</pre></details></div>`;
+    }
+    if (chain.hostname_match !== undefined) {
+      verifyLine += `<div class="chain-verify ${chain.hostname_match ? 'ok' : 'bad'}">Hostname match: ${chain.hostname_match ? 'yes' : 'NO'}</div>`;
+    }
+
+    parts.push(`<div class="panel chain-block"><h3 style="margin:.1rem 0 .8rem;font-size:.85rem;color:var(--muted)">Chain ${ci + 1}</h3>${nodes}${verifyLine}</div>`);
+  });
+
+  const seen = new Set();
+  data.chains.forEach(c => c.indices.forEach(i => seen.add(i)));
+  certs.forEach((c, i) => seen.add(i));
+
+  [...seen].sort((a, b) => a - b).forEach(idx => {
+    const c = certs[idx];
+    if (c.parse_error) {
+      parts.push(`<div class="panel cert-card" id="cert-${idx}"><h4>[${idx}] parse error</h4><div style="color:var(--bad);font-size:.85rem">${esc(c.parse_error)}</div></div>`);
+      return;
+    }
+    const st = certStatus(c);
+    const validity = c.expired ? `<span style="color:var(--bad)">EXPIRED ${-c.days_left} days ago</span>`
+      : c.not_yet_valid ? `<span style="color:var(--bad)">NOT YET VALID</span>`
+      : c.valid_now ? `<span style="color:${st === 'soon' ? 'var(--warn)' : 'var(--ok)'}">valid, ${c.days_left} days left</span>`
+      : 'unknown';
+    const rows = [
+      ['Subject', c.subject], ['Issuer', c.issuer], ['Serial', c.serial],
+      ['Valid from', c.not_before], ['Valid until', `${esc(c.not_after)} (${validity})`, true],
+      ['Subject Alt Name', c.subject_alt_name], ['Basic Constraints', c.basic_constraints],
+      ['Key Usage', c.key_usage], ['Ext. Key Usage', c.extended_key_usage],
+      ['Subject Key ID', c.subject_key_id], ['Authority Key ID', c.authority_key_id],
+      ['Authority Info Access', c.authority_info_access], ['CRL Distribution Points', c.crl_distribution_points],
+      ['Signature Algorithm', c.signature_algorithm],
+      ['Public Key', `${c.public_key_algorithm || ''} ${c.public_key_size ? '(' + c.public_key_size + ')' : ''}`],
+      ['SHA-256 Fingerprint', c.fingerprint_sha256], ['SHA-1 Fingerprint', c.fingerprint_sha1],
+    ];
+    const dl = rows.filter(r => r[1] && String(r[1]).trim()).map(([k, v, raw]) =>
+      `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('');
+
+    parts.push(`<div class="panel cert-card" id="cert-${idx}">
+      <h4><span class="pill pill-${st}">${st.toUpperCase()}</span> [${idx}] ${esc(shortName(c.subject))}${c.self_signed ? ' <span style="color:var(--muted);font-weight:400;font-size:.8rem">(self-signed)</span>' : ''}</h4>
+      <dl class="fields">${dl}</dl>
+      <details><summary>Raw (openssl x509 -text)</summary><pre>${esc(c.raw_text)}</pre></details>
+    </div>`);
+  });
+
+  results.innerHTML = parts.join('') || '<div class="empty">No certificates found.</div>';
+}
+</script>
+</body>
+</html>

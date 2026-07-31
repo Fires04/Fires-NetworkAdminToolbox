@@ -12,11 +12,15 @@ WORKDIR /srv/toolbox
 #   binary, which python:3.12-slim doesn't ship.
 # traceroute, nmap: general network-diagnostic CLI tools available inside
 #   the container for ad-hoc use (docker exec), same reasoning as ping.
+# openssl: protocol_tester.py's -p https --check-chain shells out to
+#   `openssl s_client`/`x509` to read the full certificate chain (leaf +
+#   intermediates) -- Python's own ssl module only ever exposes the leaf.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     iputils-ping \
     traceroute \
     nmap \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
@@ -24,7 +28,8 @@ COPY . .
 # Each apps/<name>/ with its own installable package needs its own pip
 # install line -- see README's "Adding an app module" section.
 RUN pip install --no-cache-dir -r webui/requirements.txt && \
-    pip install --no-cache-dir ./apps/switch-visualizer
+    pip install --no-cache-dir ./apps/switch-visualizer && \
+    pip install --no-cache-dir ./apps/cert-inspector
 
 # virtual_host_screenshot.py needs a real browser -- installs Chromium plus
 # whatever system libraries it needs to actually render pages headlessly.

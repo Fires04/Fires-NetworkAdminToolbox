@@ -29,6 +29,15 @@ Modbus TCP, DNS, NTP, or plain TCP), not just whether a port is open. See
 `protocol_tester.py --protocols` for the full list, and `-h` for all
 options.
 
+For `https`, `--check-chain` goes a step further than the normal
+validity/trust check: it fetches the *whole* certificate chain (leaf +
+every intermediate) via the system `openssl` CLI -- Python's own `ssl`
+module only ever exposes the leaf certificate -- and validates each one
+individually, reporting subject/issuer/expiry per hop plus the overall
+chain verification result. This is what catches e.g. an expired
+intermediate CA, a failure mode that's invisible if you only ever look at
+the leaf: `protocol_tester.py -p https --check-chain -v example.com`.
+
 `cli_scripts/virtual_host_tester.py` ("Virtual Host Tester" in the UI) -
 fetches a URL from a specific IP while sending a different Host header
 (and TLS SNI), the same trick `curl --resolve` uses. For testing what a
@@ -132,6 +141,25 @@ No child process, no extra port.
 `apps/switch-visualizer/` (from
 [NetworkAdminToolbox](https://github.com/Fires04/NetworkAdminToolbox)) is
 an example: a FastAPI app (`web.app:app`) with its own `pyproject.toml`.
+
+`apps/cert-inspector/` ("Certificate Inspector") is a certificate chain
+debugger: drag & drop a certificate or a full exported chain bundle (or
+paste PEM text), or point it at a live host/port instead, and it shows the
+*whole* chain -- not just the leaf, which is all a plain TLS connection
+ever exposes -- as a visual leaf-to-root diagram plus a detail card per
+certificate (validity window, SAN, key usage, basic constraints, key
+identifiers, AIA/CRL URLs, fingerprints, and the full `openssl x509 -text`
+dump for anything not broken out explicitly). It flags expired/not-yet-valid
+certificates *anywhere* in the chain (an expired intermediate is invisible
+if you only ever look at the leaf), an incomplete chain (an uploaded
+bundle whose top certificate's issuer wasn't included), and a
+hostname/SAN mismatch when an expected hostname is given. Chain trust is
+verified against the system CA store either way: live, via the same
+`openssl s_client` connection used to fetch the chain; offline, via
+`openssl verify -untrusted <chain>` against the pinned leaf. Independent
+of `cli_scripts/protocol_tester.py --check-chain` -- both solve overlapping
+problems by shelling out to `openssl`, but share no code, per the
+"drop-in-a-folder, no other code changes" spirit of `apps/`.
 
 ### Adding an app module
 
