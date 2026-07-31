@@ -52,6 +52,11 @@ enough (a JS-rendered app, a branded error page, ...). Uses Chromium's
 real browser render, not just a fetch:
 `virtual_host_screenshot.py example.com 10.0.0.5 --full-page`.
 
+The IP is optional -- leave it out (`virtual_host_screenshot.py
+example.com`) and the hostname resolves normally via DNS instead, turning
+this into a plain "what does this page look like from here" screenshot
+tool, independent of virtual-host testing.
+
 Chromium follows redirects transparently as part of a normal page load;
 this walks the redirect chain Chromium hid and prints the same `⚠`
 warning per hop (e.g. the http->https upgrade) before the final

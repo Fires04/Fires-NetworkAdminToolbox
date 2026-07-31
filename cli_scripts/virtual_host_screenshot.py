@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """
-virtual_host_screenshot.py - render a URL in a real browser while resolving
-its hostname to a specific IP, and capture a screenshot.
+virtual_host_screenshot.py - render a URL in a real browser and capture a
+screenshot, optionally resolving its hostname to a specific IP instead of
+whatever DNS would normally return.
 
-Same use case as virtual_host_tester.py (checking what a virtual host
-serves on a given backend before flipping DNS/a load balancer, without
-touching /etc/hosts) but for pages where a text/headers preview isn't
-enough to tell what's actually being served -- a JS-rendered app, a
-branded error page, a login screen, etc.
+Two uses in one tool:
+- IP given: virtual-host testing -- checking what a backend serves before
+  flipping DNS/a load balancer, without touching /etc/hosts, for pages
+  where a text/headers preview isn't enough to tell what's actually being
+  served (a JS-rendered app, a branded error page, a login screen, ...).
+- IP omitted: a plain "what does this page look like from here" screenshot,
+  resolved normally -- e.g. to see a site the way a visitor in this
+  server's location/network would, independent of virtual-host testing.
 
-Uses Chromium's own --host-resolver-rules flag to override DNS for exactly
-this hostname, so the browser still uses the real Host header and TLS SNI
--- it just dials the given IP instead of whatever DNS would normally
-return.
+When an IP is given, uses Chromium's own --host-resolver-rules flag to
+override DNS for exactly this hostname, so the browser still uses the real
+Host header and TLS SNI -- it just dials the given IP instead of whatever
+DNS would normally return.
 
 Usage:
+    virtual_host_screenshot.py example.com
     virtual_host_screenshot.py example.com 10.0.0.5
-    virtual_host_screenshot.py example.com 10.0.0.5 --output shot.png
     virtual_host_screenshot.py example.com 10.0.0.5 --full-page --insecure
 """
 import argparse
+import socket
 import sys
 
 try:
@@ -128,12 +133,15 @@ def take_screenshot(hostname, ip, port, scheme, path, width, height, timeout, in
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="virtual_host_screenshot.py",
-        description="Render a URL in headless Chromium while resolving the hostname to a "
-                     "specific IP, and capture a screenshot -- for virtual-host testing "
-                     "without editing /etc/hosts.",
+        description="Render a URL in headless Chromium and capture a screenshot. Give an IP "
+                     "for virtual-host testing (resolves the hostname to that IP instead of "
+                     "DNS, without editing /etc/hosts); omit it for a plain screenshot of the "
+                     "page as seen from here, resolved normally.",
     )
     parser.add_argument("hostname", help="hostname to browse to (Host header + TLS SNI)")
-    parser.add_argument("ip", help="IP address to resolve that hostname to")
+    parser.add_argument("ip", nargs="?", default=None,
+                         help="IP address to resolve that hostname to (default: resolve "
+                              "normally via DNS)")
     parser.add_argument("--scheme", choices=["https", "http"], default="https",
                          help="protocol to use (default: https)")
     parser.add_argument("--port", type=int, default=None,
@@ -163,22 +171,30 @@ def main():
         print("playwright is not installed (pip install playwright && playwright install chromium)")
         sys.exit(1)
 
+    ip = args.ip
+    if ip is None:
+        try:
+            ip = socket.gethostbyname(args.hostname)
+        except socket.gaierror as e:
+            print(f"{args.hostname} [FAIL] DNS resolution failed: {e}")
+            sys.exit(1)
+
     port = args.port if args.port is not None else (443 if args.scheme == "https" else 80)
 
     try:
         status, final_url, title, png_bytes, warnings = take_screenshot(
-            args.hostname, args.ip, port, args.scheme, args.path,
+            args.hostname, ip, port, args.scheme, args.path,
             args.width, args.height, args.timeout, args.insecure, args.full_page,
         )
     except Exception as e:
-        print(f"{args.hostname} @ {args.ip:<15} [FAIL] {e}")
+        print(f"{args.hostname} @ {ip:<15} [FAIL] {e}")
         sys.exit(1)
 
     for w in warnings:
         print(f"  ⚠ {w}")
 
     tag = "OK  " if status and status < 400 else "FAIL"
-    print(f"{args.hostname} @ {args.ip:<15} [{tag}] HTTP {status} -- {title!r}")
+    print(f"{args.hostname} @ {ip:<15} [{tag}] HTTP {status} -- {title!r}")
     if final_url.rstrip("/") != f"{args.scheme}://{args.hostname}{args.path}".rstrip("/"):
         print(f"  final URL: {final_url}")
 
