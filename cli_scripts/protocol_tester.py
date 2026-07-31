@@ -14,6 +14,7 @@ Usage:
     protocol_tester.py -p tcp --port 22 10.83.225.46
     protocol_tester.py -p https 10.83.225.46
     protocol_tester.py -p https -v 10.83.225.46           (extended cert info)
+    protocol_tester.py -p https --check-chain -v 10.83.225.46   (validate full chain)
     protocol_tester.py -p http 10.83.225.46                (auto-follows a
                                                            http->https redirect
                                                            with a https test)
@@ -29,6 +30,7 @@ import datetime
 import os
 import platform
 import random
+import re
 import socket
 import ssl
 import struct
@@ -180,6 +182,107 @@ def _get_cert_chain_info(ip, port, timeout):
     }
 
 
+def _describe_pem_cert(pem, timeout):
+    """Parse subject/issuer/validity out of one PEM certificate via `openssl
+    x509` -- the counterpart to _get_full_chain_info's `openssl s_client`
+    call, used to fill in per-certificate details for every hop in the chain
+    (not just the leaf)."""
+    fields = {}
+    try:
+        proc = subprocess.run(
+            ["openssl", "x509", "-noout", "-subject", "-issuer", "-startdate", "-enddate", "-serial"],
+            input=pem.encode(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return fields
+    for line in proc.stdout.decode(errors="replace").splitlines():
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key, value = key.strip(), value.strip()
+        if key == "subject":
+            fields["subject"] = value
+        elif key == "issuer":
+            fields["issuer"] = value
+        elif key == "notBefore":
+            fields["not_before"] = value
+        elif key == "notAfter":
+            fields["not_after"] = value
+        elif key == "serial":
+            fields["serial"] = value
+    return fields
+
+
+def _get_full_chain_info(ip, port, sni_hostname, timeout):
+    """Fetch the *whole* certificate chain as the server actually sends it --
+    leaf plus every intermediate -- via the system `openssl` CLI, since
+    Python's own `ssl` module (see _get_cert_chain_info above) only ever
+    exposes the leaf certificate. Reports each certificate's validity window
+    plus the overall chain verification result against the system trust
+    store, e.g. an expired intermediate is exactly the kind of failure that's
+    invisible if you only ever look at the leaf cert.
+
+    Raises RuntimeError (with a human-readable reason) if openssl isn't
+    available, times out, or the handshake yields no certificates at all.
+    """
+    try:
+        proc = subprocess.run(
+            ["openssl", "s_client", "-connect", f"{ip}:{port}",
+             "-servername", sni_hostname, "-showcerts", "-verify", "10"],
+            input=b"", stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
+        )
+    except FileNotFoundError:
+        raise RuntimeError("openssl CLI not available on this system (needed for --check-chain)")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("openssl s_client timed out while fetching the chain")
+
+    output = proc.stdout.decode(errors="replace")
+    pem_blocks = re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", output, re.S)
+    if not pem_blocks:
+        raise RuntimeError("no certificates returned by 'openssl s_client -showcerts'")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    chain = []
+    errors = []
+    for depth, pem in enumerate(pem_blocks):
+        fields = _describe_pem_cert(pem, timeout)
+        entry = {"depth": depth, **fields}
+
+        valid_now, days_left = None, None
+        if fields.get("not_before") and fields.get("not_after"):
+            not_before = datetime.datetime.fromtimestamp(
+                ssl.cert_time_to_seconds(fields["not_before"]), tz=datetime.timezone.utc)
+            not_after = datetime.datetime.fromtimestamp(
+                ssl.cert_time_to_seconds(fields["not_after"]), tz=datetime.timezone.utc)
+            valid_now = not_before <= now <= not_after
+            days_left = (not_after - now).days
+        entry["valid_now"], entry["days_left"] = valid_now, days_left
+        chain.append(entry)
+
+        who = fields.get("subject", f"chain position {depth}")
+        if valid_now is False:
+            if days_left is not None and days_left < 0:
+                errors.append(f"[{depth}] {who}: EXPIRED {-days_left} days ago")
+            else:
+                errors.append(f"[{depth}] {who}: not yet valid")
+        elif valid_now is True and days_left is not None and days_left < 14:
+            errors.append(f"[{depth}] {who}: expires soon, {days_left} days left")
+
+    verify_match = re.search(r"Verify return code:\s*(\d+)\s*\(([^)]*)\)", output)
+    verify_code = int(verify_match.group(1)) if verify_match else None
+    verify_message = verify_match.group(2) if verify_match else "unknown (could not parse openssl output)"
+    verify_ok = verify_code == 0
+    if not verify_ok:
+        errors.append(f"chain verification failed: {verify_message}")
+
+    return {
+        "chain": chain,
+        "verify_ok": verify_ok,
+        "verify_message": verify_message,
+        "errors": errors,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Protocol test implementations
 #
@@ -294,8 +397,15 @@ def test_http(ip, port, timeout, **kwargs):
         return False, f"connection error: {e}", {}
 
 
-def test_https(ip, port, timeout, **kwargs):
-    """HTTPS: TLS handshake + certificate validity/trust check + HEAD request."""
+def test_https(ip, port, timeout, check_chain=False, **kwargs):
+    """HTTPS: TLS handshake + certificate validity/trust check + HEAD request.
+
+    With check_chain=True (--check-chain), also fetches the full certificate
+    chain (leaf + every intermediate) via the openssl CLI and validates each
+    one individually -- catches e.g. an expired intermediate CA, which the
+    single-cert trust check above can't distinguish from other verification
+    failures.
+    """
     try:
         info = _get_cert_chain_info(ip, port, timeout)
     except socket.timeout:
@@ -360,6 +470,23 @@ def test_https(ip, port, timeout, **kwargs):
         "headers": headers,
     }
     details.update(redirect_extra)
+
+    if check_chain:
+        try:
+            chain_info = _get_full_chain_info(ip, port, ip, timeout)
+        except RuntimeError as e:
+            details["chain_error"] = str(e)
+            message += f" | chain check failed: {e}"
+        else:
+            details["chain"] = chain_info["chain"]
+            details["chain_verify_ok"] = chain_info["verify_ok"]
+            details["chain_verify_message"] = chain_info["verify_message"]
+            details["chain_errors"] = chain_info["errors"]
+            n = len(chain_info["chain"])
+            if chain_info["errors"]:
+                message += f" | chain ({n} certs): {'; '.join(chain_info['errors'])}"
+            else:
+                message += f" | chain ({n} certs): OK"
 
     return True, message, details
 
@@ -1123,7 +1250,7 @@ PROTOCOLS = {
     },
     "https": {
         "port": 443,
-        "description": "HTTPS - TLS handshake + certificate validity/trust check",
+        "description": "HTTPS - TLS handshake + certificate validity/trust check (add --check-chain to validate the full chain)",
         "test": test_https,
     },
     "ssh": {
@@ -1259,6 +1386,21 @@ def print_details(protocol, details):
             print(f"    trust error   : {details['trust_error']}")
         if details.get("parse_error"):
             print(f"    parse error   : {details['parse_error']}")
+        if details.get("chain"):
+            print(f"    chain ({len(details['chain'])} certs):")
+            for c in details["chain"]:
+                if c.get("valid_now") is True:
+                    status = f"valid, {c.get('days_left')}d left"
+                elif c.get("valid_now") is False:
+                    status = "EXPIRED" if (c.get("days_left") or 0) < 0 else "NOT YET VALID"
+                else:
+                    status = "unknown"
+                print(f"      [{c['depth']}] {c.get('subject', '?')}")
+                print(f"          issuer: {c.get('issuer', '?')}  [{status}]")
+            verify_status = "ok" if details.get("chain_verify_ok") else f"FAILED: {details.get('chain_verify_message')}"
+            print(f"    chain verify  : {verify_status}")
+        if details.get("chain_error"):
+            print(f"    chain check   : FAILED ({details['chain_error']})")
 
     if protocol == "opc":
         for key in ("protocol_version", "receive_buffer_size", "send_buffer_size",
@@ -1398,6 +1540,11 @@ def build_parser():
                          help="username for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps only)")
     parser.add_argument("--password", default=None,
                          help="password for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps only)")
+    parser.add_argument("--check-chain", action="store_true",
+                         help="fetch and validate the FULL certificate chain (leaf + every "
+                              "intermediate, not just the leaf), reporting each certificate's "
+                              "subject/issuer/expiry and any chain verification errors (https "
+                              "only; requires the openssl CLI)")
     parser.add_argument("targets", nargs="*", metavar="IP",
                          help="one or more IP addresses / hostnames to test")
     if clidescribe:
@@ -1429,6 +1576,8 @@ def main():
     extra = {}
     if args.protocol in ("smtp", "smtps", "pop3", "pop3s", "imap", "imaps"):
         extra = {"user": args.user, "password": args.password}
+    elif args.protocol == "https":
+        extra = {"check_chain": args.check_chain}
 
     for ip in args.targets:
         if args.ping:
@@ -1446,7 +1595,8 @@ def main():
             target_host = parsed.hostname or ip
             target_port = parsed.port or 443
             print(f"{ip:<16} [HTTP->HTTPS] redirect detected -> testing {target_host}:{target_port}")
-            run_and_print("https", target_host, target_port, args.timeout, args.verbose)
+            run_and_print("https", target_host, target_port, args.timeout, args.verbose,
+                          check_chain=args.check_chain)
 
 
 if __name__ == "__main__":
