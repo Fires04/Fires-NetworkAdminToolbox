@@ -85,6 +85,26 @@ just Python stdlib, and it adds roughly 1GB to the image. Worth it only
 because this tool specifically needs a real rendering engine; don't reach
 for it as a default way to add tools here.
 
+`cli_scripts/host_report.py` ("Host Report" in the UI) - ping + DNS report
+(A, MX records) for a list of hosts/IPs, printed as a table:
+`host_report.py example.com 8.8.8.8 mail.example.com`. A/MX lookups are a
+small hand-rolled DNS query over UDP (stdlib only, no dnspython), sent to
+a single resolver of your choosing (`--resolver`, default: the first
+nameserver in `/etc/resolv.conf`) -- useful for checking what an internal/
+split-horizon DNS server answers specifically, not just whatever the
+system resolver happens to be. Ping shells out to the system `ping`
+binary, same as `protocol_tester.py --ping`; `--no-ping` skips it and
+only reports DNS.
+
+`--extract` is EXPERIMENTAL: instead of a literal host list, treat the
+given argument(s) as one blob of free text and regex-pull out anything
+that looks like a hostname (`hostname.tld` / `www.hostname.tld`, requires
+an alphabetic TLD) or an IPv4 address --
+`host_report.py --extract "web1.example.com (10.0.0.5) is down, cc mx01.example.com"`.
+A hand-written pattern like this will both miss unusual real names and
+pick up look-alike noise; it's a rough first pass over a log/ticket/email
+paste, not a guarantee of completeness or precision.
+
 ### Tools that return an image
 
 A clidescribe-based tool can return an image instead of (or alongside)
