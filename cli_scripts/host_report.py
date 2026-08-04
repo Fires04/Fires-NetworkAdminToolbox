@@ -246,21 +246,40 @@ def parse_target_list(items):
 # Report building / table output
 # ---------------------------------------------------------------------------
 
+def _cell(records, max_width):
+    """Abbreviate a list of already-formatted entry strings (IPs, or
+    'pref exchange' MX strings) down to just the most relevant one (records
+    are pre-sorted where order matters, e.g. MX by preference) plus a
+    "+N more" count, so a table cell never grows past max_width -- a host
+    with a handful of A/MX records was otherwise the one thing wide enough
+    to force the console to line-wrap and make the whole table look broken.
+    Returns (display, truncated) -- truncated means the full list belongs
+    in the Details section below the table, since something was left out.
+    """
+    if not records:
+        return "none", False
+    display = records[0] + (f"  +{len(records) - 1} more" if len(records) > 1 else "")
+    if len(display) > max_width:
+        return display[:max_width - 1] + "…", True
+    return display, len(records) > 1
+
+
 def build_row(target, resolver, dns_timeout, ping_timeout, skip_ping):
-    row = {"target": target}
+    row = {"target": target, "a_full": None}
 
     if is_ip(target):
         row["ip"] = target
-        row["a_records"] = target
+        row["a_records"], row["a_trunc"] = target, False
         row["mx_records"] = "-"
     else:
         ips, a_err = lookup_a(target, resolver, dns_timeout)
         if ips is None:
-            row["a_records"], row["ip"] = f"ERROR: {a_err}", None
+            row["a_records"], row["a_trunc"], row["ip"] = f"ERROR: {a_err}", False, None
         elif not ips:
-            row["a_records"], row["ip"] = (f"none ({a_err})" if a_err else "none"), None
+            row["a_records"], row["a_trunc"], row["ip"] = (f"none ({a_err})" if a_err else "none"), False, None
         else:
-            row["a_records"], row["ip"] = ", ".join(ips), ips[0]
+            row["a_records"], row["a_trunc"] = _cell(ips, 22)
+            row["a_full"], row["ip"] = ips, ips[0]
 
         mx, mx_err = lookup_mx(target, resolver, dns_timeout)
         if mx is None:
@@ -275,7 +294,7 @@ def build_row(target, resolver, dns_timeout, ping_timeout, skip_ping):
     elif row.get("ip"):
         ok, latency = ping(row["ip"], timeout=ping_timeout)
         if ok is None:
-            row["ping"] = "n/a (no ping binary)"
+            row["ping"] = "n/a (no ping)"
         elif ok:
             row["ping"] = f"OK {latency:.1f} ms" if latency is not None else "OK"
         else:
@@ -286,7 +305,7 @@ def build_row(target, resolver, dns_timeout, ping_timeout, skip_ping):
     return row
 
 
-def format_table(headers, rows, max_col_width=60):
+def format_table(headers, rows, max_col_width=24):
     widths = [min(max(len(h), *(len(r[i]) for r in rows)) if rows else len(h), max_col_width)
               for i, h in enumerate(headers)]
 
@@ -355,12 +374,34 @@ def main():
         try:
             rows.append(build_row(target, resolver, args.dns_timeout, args.ping_timeout, args.no_ping))
         except Exception as e:
-            rows.append({"target": target, "ping": "-", "a_records": f"ERROR: {e}", "mx_records": "-"})
+            rows.append({"target": target, "ping": "-", "a_records": f"ERROR: {e}",
+                         "mx_records": "-", "a_trunc": False, "a_full": None})
 
+    # Host/IP + Ping + A record(s) as an actual grid table -- these three
+    # are always short (a hostname, "OK 12.3 ms", one IP + a "+N more"
+    # count), so the row reliably fits without wrapping. MX records don't
+    # have that guarantee (exchange hostnames run long, and a domain can
+    # have several), so they get their own "label: value" line per host
+    # below instead of a 4th column -- wrapping a long value there is just
+    # a wrapped paragraph, not a broken grid.
     print(f"DNS resolver: {resolver}\n")
-    headers = ["Host/IP", "Ping", "A record(s)", "MX record(s)"]
-    table = [[r["target"], r["ping"], r["a_records"], r["mx_records"]] for r in rows]
+    headers = ["Host/IP", "Ping", "A record(s)"]
+    table = [[r["target"], r["ping"], r["a_records"]] for r in rows]
     print(format_table(headers, table))
+
+    label_width = min(max((len(r["target"]) for r in rows), default=7), 24)
+    print("\nMX record(s):")
+    for r in rows:
+        label = r["target"]
+        if len(label) > label_width:
+            label = label[:label_width - 1] + "…"
+        print(f"  {label.ljust(label_width)} : {r['mx_records']}")
+
+    detailed = [r for r in rows if r.get("a_trunc")]
+    if detailed:
+        print("\nFull A record list(s) (abbreviated above):")
+        for r in detailed:
+            print(f"  {r['target']}: {', '.join(r['a_full'])}")
 
 
 if __name__ == "__main__":
