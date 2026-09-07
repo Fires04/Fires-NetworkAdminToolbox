@@ -365,6 +365,33 @@ def tool_page(name: str):
     return render_tool_page(name, tools[name]["schema"])
 
 
+def _redacted_cmdline(schema, argv, prog_parts):
+    """Build the human-facing command line, with any --password-style
+    argument's value replaced by asterisks so a secret never lands in the
+    console output or browser history. Same "password" in name.lower()
+    convention already used to pick <input type="password"> for the form
+    field (see render_field above) -- a field counts as secret there, it
+    counts as secret here.
+    """
+    secret_flags = set()
+    for arg in schema.get("arguments", []):
+        if "password" in arg["name"].lower():
+            flag = next((f for f in arg["flags"] if f.startswith("--")), None)
+            if flag:
+                secret_flags.add(flag)
+
+    redacted = []
+    mask_next = False
+    for token in argv:
+        if mask_next:
+            redacted.append("********")
+            mask_next = False
+        else:
+            redacted.append(token)
+            mask_next = token in secret_flags
+    return " ".join(prog_parts + redacted)
+
+
 def _run_tool_blocking(name, values):
     """Everything here is blocking (subprocess.run, twice over) -- must run
     off the event loop thread (see tool_run) or it stalls every other
@@ -391,7 +418,7 @@ def _run_tool_blocking(name, values):
 
     return {
         "ok": ok,
-        "cmdline": " ".join([Path(full_cmd[0]).name, path.name] + argv),
+        "cmdline": _redacted_cmdline(schema, argv, [Path(full_cmd[0]).name, path.name]),
         "output": output,
         "image": image,
     }, 200

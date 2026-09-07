@@ -23,10 +23,28 @@ Usage:
     protocol_tester.py -p modbus 10.83.225.40
     protocol_tester.py -p smtp -v mail.example.com
     protocol_tester.py -p smtp -v --user me@example.com --password secret mail.example.com
+    protocol_tester.py -p ftp -v --user me --password secret 10.83.225.46
+                                                           (also lists the
+                                                           current directory
+                                                           via PASV to prove
+                                                           FTP is functional,
+                                                           not just that the
+                                                           control port answers)
+    protocol_tester.py -p https -v --user me --password secret example.com
+                                                           (retries with HTTP
+                                                           Basic auth if the
+                                                           server answers 401)
+    protocol_tester.py -p https -v mail.example.com        (verbose mode also
+                                                           prints this machine's
+                                                           public IP, plus the
+                                                           target's resolved
+                                                           public IP if given
+                                                           as a hostname)
 """
 import argparse
 import base64
 import datetime
+import ipaddress
 import os
 import platform
 import random
@@ -42,11 +60,43 @@ except ImportError:
     clidescribe = None
 import tempfile
 import urllib.parse
+import urllib.request
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+def _is_ip_literal(host):
+    """True if `host` is already a numeric IP literal (v4 or v6), as opposed
+    to a hostname/FQDN that still needs DNS resolution."""
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def get_public_ip(timeout):
+    """Best-effort lookup of this machine's own public (outbound) IP
+    address, by asking a well-known IP-echo service (first one that answers
+    wins). Returns None if none of them could be reached (e.g. no internet
+    access from this host) -- callers must treat this as diagnostic/
+    advisory only, not an authoritative identity check.
+    """
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                candidate = resp.read().decode(errors="replace").strip()
+            if _is_ip_literal(candidate):
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+PASSWORD_MASK = "*" * 12  # what a supplied --password shows up as in transcripts/logs
+
 
 def parse_http_response(resp):
     """Parse raw HTTP response bytes into (status_code, status_line, headers)."""
@@ -358,53 +408,102 @@ def test_tcp(ip, port, timeout, **kwargs):
         return False, f"connection error: {e}", {}
 
 
-def test_http(ip, port, timeout, **kwargs):
+def _http_probe(connect, ip, timeout, user=None, password=None):
+    """Send a HEAD / request via `connect()` (a zero-arg callable returning a
+    fresh, ready-to-use socket -- plain for HTTP, TLS-wrapped for HTTPS).
+
+    If the first (unauthenticated) response is 401 Unauthorized and --user/
+    --password were supplied, retries once with an HTTP Basic Authorization
+    header and reports whether that actually got past the 401 -- this is
+    what verifies the credentials work, not just that something answered.
+
+    Returns (matched, status_code, status_line, headers, auth_result, resp)
+    where `matched` is False if the first response wasn't even HTTP-shaped
+    (caller should treat that as a hard failure, same as before this
+    refactor); status_code/status_line/headers reflect the *last* attempt
+    made (the authenticated retry, when one happened).
+    """
+    def one_attempt(auth_header):
+        s = connect()
+        try:
+            s.settimeout(timeout)
+            req = f"HEAD / HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n"
+            if auth_header:
+                req += f"Authorization: {auth_header}\r\n"
+            req += "\r\n"
+            s.sendall(req.encode('ascii'))
+            return s.recv(4096)
+        finally:
+            s.close()
+
+    resp = one_attempt(None)
+    if not resp.startswith(b'HTTP/'):
+        return False, None, None, {}, None, resp
+
+    status_code, status_line, headers = parse_http_response(resp)
+    auth_result = None
+    if status_code == 401 and user is not None and password is not None:
+        token = base64.b64encode(f"{user}:{password}".encode()).decode()
+        resp2 = one_attempt(f"Basic {token}")
+        status_code2, status_line2, headers2 = parse_http_response(resp2)
+        auth_result = "success" if (status_code2 and status_code2 != 401) else \
+            f"failed (still {status_line2 or status_code2})"
+        status_code, status_line, headers, resp = status_code2, status_line2, headers2, resp2
+    elif user is not None and password is not None:
+        auth_result = "not attempted (server did not request authentication)"
+
+    return True, status_code, status_line, headers, auth_result, resp
+
+
+def test_http(ip, port, timeout, user=None, password=None, **kwargs):
     """HTTP: TCP connect + minimal HEAD request, checks for a valid status line.
 
     If the server answers with a 3xx redirect to an https:// URL, this is
     flagged in `details` (redirect_to_https / redirect_location) so the
-    caller can automatically follow up with an HTTPS test.
+    caller can automatically follow up with an HTTPS test. If --user/
+    --password are supplied and the server responds 401 Unauthorized,
+    retries once with HTTP Basic auth to verify the credentials are accepted.
     """
     try:
-        with socket.create_connection((ip, port), timeout=timeout) as s:
-            s.settimeout(timeout)
-            req = f"HEAD / HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n"
-            s.sendall(req.encode('ascii'))
-            try:
-                resp = s.recv(4096)
-            except socket.timeout:
-                return False, "TCP open, but no HTTP response (timeout)", {}
-
-            if not resp.startswith(b'HTTP/'):
-                return False, f"unexpected response: {resp[:80]!r}", {}
-
-            status_code, status_line, headers = parse_http_response(resp)
-            details = {"status_code": status_code, "headers": headers}
-
-            if status_code and 300 <= status_code < 400 and 'location' in headers:
-                location = headers['location']
-                is_https = location.lower().startswith('https://')
-                details["redirect_location"] = location
-                details["redirect_to_https"] = is_https
-                return True, f"OK, server responded: {status_line} -> redirects to {location}", details
-
-            return True, f"OK, server responded: {status_line}", details
+        matched, status_code, status_line, headers, auth_result, resp = _http_probe(
+            lambda: socket.create_connection((ip, port), timeout=timeout), ip, timeout, user, password)
     except socket.timeout:
-        return False, "timed out (no TCP connection)", {}
+        return False, "timed out (no TCP connection / no HTTP response)", {}
     except ConnectionRefusedError:
         return False, "connection refused (port closed)", {}
     except OSError as e:
         return False, f"connection error: {e}", {}
 
+    if not matched:
+        return False, f"unexpected response: {resp[:80]!r}", {}
 
-def test_https(ip, port, timeout, check_chain=False, **kwargs):
+    details = {"status_code": status_code, "headers": headers}
+    if auth_result:
+        details["auth_result"] = auth_result
+
+    msg = f"OK, server responded: {status_line}"
+    if auth_result:
+        msg += f", Basic auth: {auth_result}"
+
+    if status_code and 300 <= status_code < 400 and 'location' in headers:
+        location = headers['location']
+        is_https = location.lower().startswith('https://')
+        details["redirect_location"] = location
+        details["redirect_to_https"] = is_https
+        msg += f" -> redirects to {location}"
+
+    return True, msg, details
+
+
+def test_https(ip, port, timeout, check_chain=False, user=None, password=None, **kwargs):
     """HTTPS: TLS handshake + certificate validity/trust check + HEAD request.
 
     With check_chain=True (--check-chain), also fetches the full certificate
     chain (leaf + every intermediate) via the openssl CLI and validates each
     one individually -- catches e.g. an expired intermediate CA, which the
     single-cert trust check above can't distinguish from other verification
-    failures.
+    failures. If --user/--password are supplied and the server responds 401
+    Unauthorized, retries the HEAD request once with HTTP Basic auth.
     """
     try:
         info = _get_cert_chain_info(ip, port, timeout)
@@ -421,20 +520,22 @@ def test_https(ip, port, timeout, check_chain=False, **kwargs):
 
     # Best-effort HTTP probe over the TLS session (separate connection);
     # failure here doesn't invalidate the certificate result above.
-    status_code, status_line, headers = None, None, {}
-    redirect_extra = {}
-    try:
+    def _connect_tls():
+        raw = socket.create_connection((ip, port), timeout=timeout)
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with socket.create_connection((ip, port), timeout=timeout) as sock:
-            with ctx.wrap_socket(sock, server_hostname=ip) as ssock:
-                ssock.settimeout(timeout)
-                req = f"HEAD / HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n"
-                ssock.sendall(req.encode('ascii'))
-                resp = ssock.recv(4096)
-        status_code, status_line, headers = parse_http_response(resp)
-        if status_code and 300 <= status_code < 400 and 'location' in headers:
+        return ctx.wrap_socket(raw, server_hostname=ip)
+
+    status_code, status_line, headers = None, None, {}
+    redirect_extra = {}
+    auth_result = None
+    try:
+        matched, status_code, status_line, headers, auth_result, _resp = _http_probe(
+            _connect_tls, ip, timeout, user, password)
+        if not matched:
+            status_code, status_line, headers = None, None, {}
+        elif status_code and 300 <= status_code < 400 and 'location' in headers:
             redirect_extra = {"redirect_location": headers['location']}
     except Exception:
         pass
@@ -455,6 +556,8 @@ def test_https(ip, port, timeout, check_chain=False, **kwargs):
                f"cert {cert_status}, trusted by system CA: {trust_status}")
     if status_line:
         message += f" | HTTP: {status_line}"
+        if auth_result:
+            message += f", Basic auth: {auth_result}"
 
     details = {
         "cipher": info["cipher"],
@@ -469,6 +572,8 @@ def test_https(ip, port, timeout, check_chain=False, **kwargs):
         "status_code": status_code,
         "headers": headers,
     }
+    if auth_result:
+        details["auth_result"] = auth_result
     details.update(redirect_extra)
 
     if check_chain:
@@ -514,27 +619,179 @@ def test_ssh(ip, port, timeout, **kwargs):
         return False, f"connection error: {e}", {}
 
 
-def test_ftp(ip, port, timeout, **kwargs):
-    """FTP: TCP connect, reads the server's greeting banner (no auth)."""
+def _recv_ftp_reply(rfile):
+    """Read exactly one FTP control reply from `rfile` (a buffered socket
+    file object, see test_ftp) and return it as a list of lines.
+
+    A reply is either a single line ("NNN text") or a multi-line block that
+    starts with "NNN-text" continuation lines and ends with a "NNN text"
+    line repeating the *same* code NNN. Checking for that repeated code --
+    not just "does the last line look like a generic reply" -- matters
+    specifically for FTP's LIST command: it gets two logically separate
+    replies (a "150" when the data transfer starts, then a later "226" once
+    it's done), and on a fast/local transfer both can already be sitting in
+    the socket buffer together. A naive "stop once some line looks like a
+    final reply" check would swallow both into one, leaving the real 226
+    reply already consumed by the time the caller goes to read it -- which
+    then hangs until it times out. Reading via a buffered file object
+    (rather than raw chunks) is what lets any such already-buffered leftover
+    survive untouched for that next read.
+    """
+    # No .settimeout() on a buffered file object -- it reads through the
+    # underlying socket, which already has the timeout set (test_ftp calls
+    # s.settimeout(timeout) once, before rfile is created).
+    first = rfile.readline().decode(errors='replace').rstrip('\r\n')
+    if not first:
+        return []
+    lines = [first]
+    if len(first) >= 4 and first[:3].isdigit() and first[3] == '-':
+        code = first[:3]
+        while True:
+            line = rfile.readline().decode(errors='replace').rstrip('\r\n')
+            if not line:
+                break
+            lines.append(line)
+            if line[:3] == code and len(line) >= 4 and line[3] == ' ':
+                break
+    return lines
+
+
+def _ftp_pasv_list(sock, timeout, send, recv):
+    """Attempt a PASV directory listing of the current directory over an
+    already-connected (and, normally, already-logged-in) FTP control
+    connection. `send`/`recv` are the caller's transcript-recording
+    helpers. Returns (ok, message, details).
+
+    The whole thing is wrapped in one try/except so any unexpected socket
+    hiccup (e.g. the control channel stalling while waiting for the final
+    226 reply) is reported as a listing failure rather than aborting the
+    whole FTP test -- login already succeeded by the time this runs, so
+    that result must not be lost just because the listing step wobbled.
+    """
+    try:
+        send("PASV")
+        pasv_resp = recv()
+        if not pasv_resp or not pasv_resp[0].startswith("227"):
+            return False, f"PASV not accepted ({pasv_resp[0] if pasv_resp else 'no response'})", {}
+
+        m = re.search(r'(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)', pasv_resp[0])
+        if not m:
+            return False, f"could not parse PASV response: {pasv_resp[0]}", {}
+        n = [int(x) for x in m.groups()]
+        data_ip = ".".join(str(x) for x in n[:4])
+        data_port = n[4] * 256 + n[5]
+
+        with socket.create_connection((data_ip, data_port), timeout=timeout) as dsock:
+            dsock.settimeout(timeout)
+            send("LIST")
+            list_resp = recv()
+            if not list_resp or list_resp[0][:1] != '1':
+                return False, f"LIST not accepted ({list_resp[0] if list_resp else 'no response'})", {}
+
+            data = b""
+            try:
+                while True:
+                    chunk = dsock.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+            except socket.timeout:
+                pass
+
+        final_resp = recv()
+    except OSError as e:
+        return False, f"listing failed: {e}", {}
+
+    entries = [l for l in data.decode(errors='replace').splitlines() if l.strip()]
+    if final_resp and final_resp[-1][:1] not in ('1', '2'):
+        return False, f"transfer failed: {final_resp[-1]}", {"listing": entries}
+
+    count = len(entries)
+    return True, f"directory listing OK, {count} entr{'y' if count == 1 else 'ies'}", {
+        "listing": entries[:50], "listing_count": count,
+    }
+
+
+def test_ftp(ip, port, timeout, user=None, password=None, **kwargs):
+    """FTP: TCP connect, reads the server's greeting banner.
+
+    If --user/--password are supplied, also logs in (USER/[PASS]) and, on a
+    successful login, requests a PASV directory listing of the current
+    directory -- this is what actually proves FTP is functional rather than
+    just that the control port answers with a banner. Without credentials,
+    behaves as before (banner only).
+    """
+    transcript = []
     try:
         with socket.create_connection((ip, port), timeout=timeout) as s:
             s.settimeout(timeout)
+            # Buffered so a reply's trailing bytes that arrive together with
+            # the *next* reply (see _recv_ftp_reply) aren't lost -- a raw
+            # sock.recv() has no way to "put back" leftover bytes.
+            rfile = s.makefile('rb')
+
+            def send(line, log_line=None):
+                # log_line lets a caller show a redacted version in the
+                # transcript (e.g. PASS) while the real line still goes out
+                # on the wire.
+                transcript.append((">", log_line if log_line is not None else line))
+                s.sendall((line + "\r\n").encode("ascii", errors="replace"))
+
+            def recv():
+                lines = _recv_ftp_reply(rfile)
+                for line in lines:
+                    transcript.append(("<", line))
+                return lines
+
             try:
-                banner = s.recv(256)
+                banner = recv()
             except socket.timeout:
-                return False, "TCP open, but no FTP banner (timeout)", {}
-            if not banner:
-                return False, "TCP open, connection closed with no data", {}
-            text = banner.decode(errors='replace').strip()
-            if text[:3].isdigit() and text[0] == '2':
-                return True, f"OK, server banner: {text}", {"banner": text}
-            return False, f"unexpected banner: {text!r}", {}
+                return False, "TCP open, but no FTP banner (timeout)", {"transcript": transcript}
+            if not banner or banner[0][:1] != '2':
+                return False, f"unexpected/no banner: {banner!r}", {"transcript": transcript}
+
+            # Keep the one-line summary to just the first banner line (some
+            # servers, e.g. Pure-FTPd, send a decorative multi-line greeting
+            # that's unreadable crammed into one sentence); the verbose
+            # detail view below shows the banner's remaining lines instead
+            # of repeating this same first line a second time.
+            details = {"banner": banner, "transcript": transcript}
+            msg = f"OK, server banner: {banner[0]}"
+
+            if user is not None:
+                send(f"USER {user}")
+                user_resp = recv()
+                if user_resp and user_resp[0].startswith("230"):
+                    login_result = "success (no password required)"
+                elif user_resp and user_resp[0].startswith("331"):
+                    if password is not None:
+                        send(f"PASS {password}", log_line=f"PASS {PASSWORD_MASK}")
+                        pass_resp = recv()
+                        login_result = "success" if (pass_resp and pass_resp[0].startswith("230")) \
+                            else f"failed ({pass_resp[0] if pass_resp else 'no response'})"
+                    else:
+                        login_result = "password required but not supplied"
+                else:
+                    login_result = f"USER rejected ({user_resp[0] if user_resp else 'no response'})"
+                details["login_result"] = login_result
+                msg += f", login: {login_result}"
+
+                if login_result.startswith("success"):
+                    list_ok, list_msg, list_details = _ftp_pasv_list(s, timeout, send, recv)
+                    details.update(list_details)
+                    msg += f", {list_msg}"
+                    if not list_ok:
+                        details["listing_error"] = list_msg
+
+            send("QUIT")
+            recv()
+            return True, msg, details
     except socket.timeout:
-        return False, "timed out (no TCP connection)", {}
+        return False, "timed out (no TCP connection)", {"transcript": transcript}
     except ConnectionRefusedError:
-        return False, "connection refused (port closed)", {}
+        return False, "connection refused (port closed)", {"transcript": transcript}
     except OSError as e:
-        return False, f"connection error: {e}", {}
+        return False, f"connection error: {e}", {"transcript": transcript}
 
 
 def test_rdp(ip, port, timeout, **kwargs):
@@ -834,8 +1091,8 @@ def _smtp_session(sock, ip, timeout, user, password, transcript, allow_starttls)
     same variable, so they automatically start using the encrypted socket
     for every call made after the upgrade.
     """
-    def send(line):
-        transcript.append((">", line))
+    def send(line, log_line=None):
+        transcript.append((">", log_line if log_line is not None else line))
         sock.sendall((line + "\r\n").encode("ascii", errors="replace"))
 
     def recv():
@@ -889,7 +1146,7 @@ def _smtp_session(sock, ip, timeout, user, password, transcript, allow_starttls)
             send(base64.b64encode(user.encode()).decode())
             r2 = recv()
             if r2 and r2[0].startswith("334"):
-                send(base64.b64encode(password.encode()).decode())
+                send(base64.b64encode(password.encode()).decode(), log_line=PASSWORD_MASK)
                 r3 = recv()
                 auth_result = "success" if (r3 and r3[0].startswith("235")) else \
                     f"failed ({r3[0] if r3 else 'no response'})"
@@ -980,8 +1237,8 @@ def _pop3_session(sock, ip, timeout, user, password, transcript, allow_stls):
     successful STLS upgrade, send/recv_line below transparently switch to
     the encrypted socket for every subsequent call.
     """
-    def send(line):
-        transcript.append((">", line))
+    def send(line, log_line=None):
+        transcript.append((">", log_line if log_line is not None else line))
         sock.sendall((line + "\r\n").encode("ascii", errors="replace"))
 
     def recv_line():
@@ -1028,7 +1285,7 @@ def _pop3_session(sock, ip, timeout, user, password, transcript, allow_stls):
         send(f"USER {user}")
         user_resp = recv_line()
         if user_resp.startswith("+OK"):
-            send(f"PASS {password}")
+            send(f"PASS {password}", log_line=f"PASS {PASSWORD_MASK}")
             pass_resp = recv_line()
             login_result = "success" if pass_resp.startswith("+OK") else f"failed ({pass_resp})"
         else:
@@ -1109,8 +1366,8 @@ def _imap_session(sock, ip, timeout, user, password, transcript, allow_starttls)
         tag_counter[0] += 1
         return f"a{tag_counter[0]}"
 
-    def send(line):
-        transcript.append((">", line))
+    def send(line, log_line=None):
+        transcript.append((">", log_line if log_line is not None else line))
         sock.sendall((line + "\r\n").encode("ascii", errors="replace"))
 
     def recv_line():
@@ -1164,7 +1421,7 @@ def _imap_session(sock, ip, timeout, user, password, transcript, allow_starttls)
     login_result = None
     if user is not None and password is not None:
         tag = next_tag()
-        send(f'{tag} LOGIN "{user}" "{password}"')
+        send(f'{tag} LOGIN "{user}" "{password}"', log_line=f'{tag} LOGIN "{user}" "{PASSWORD_MASK}"')
         lines = recv_until_tag(tag)
         final = lines[-1] if lines else ""
         login_result = "success" if f"{tag} OK" in final else f"failed ({final})"
@@ -1245,12 +1502,12 @@ PROTOCOLS = {
     },
     "http": {
         "port": 80,
-        "description": "HTTP - TCP connect + HEAD request (auto-follows redirects to https)",
+        "description": "HTTP - TCP connect + HEAD request (auto-follows redirects to https, optional --user/--password Basic auth check on a 401)",
         "test": test_http,
     },
     "https": {
         "port": 443,
-        "description": "HTTPS - TLS handshake + certificate validity/trust check (add --check-chain to validate the full chain)",
+        "description": "HTTPS - TLS handshake + certificate validity/trust check (add --check-chain to validate the full chain, optional --user/--password Basic auth check on a 401)",
         "test": test_https,
     },
     "ssh": {
@@ -1260,7 +1517,7 @@ PROTOCOLS = {
     },
     "ftp": {
         "port": 21,
-        "description": "FTP - TCP connect, reads the FTP greeting banner",
+        "description": "FTP - TCP connect, reads the FTP greeting banner (optional --user/--password login + PASV directory listing)",
         "test": test_ftp,
     },
     "smtp": {
@@ -1361,6 +1618,8 @@ def print_details(protocol, details):
     if protocol in ("http", "https"):
         if details.get("status_code") is not None:
             print(f"    status code   : {details['status_code']}")
+        if details.get("auth_result"):
+            print(f"    Basic auth    : {details['auth_result']}")
         headers = details.get("headers") or {}
         if headers:
             print("    headers       :")
@@ -1408,9 +1667,34 @@ def print_details(protocol, details):
             if key in details:
                 print(f"    {key:<14}: {details[key]}")
 
-    if protocol in ("ssh", "ftp"):
+    if protocol == "ssh":
         if details.get("banner"):
             print(f"    banner        : {details['banner']}")
+
+    if protocol == "ftp":
+        # The one-line summary above already showed banner_lines[0] in full;
+        # only show the *rest* of a multi-line greeting here, one per line,
+        # instead of repeating that same first line a second time.
+        extra_banner_lines = (details.get("banner") or [])[1:]
+        if extra_banner_lines:
+            print("    banner (cont.):")
+            for line in extra_banner_lines:
+                print(f"      {line}")
+        if details.get("login_result"):
+            print(f"    login         : {details['login_result']}")
+        if details.get("listing_error"):
+            print(f"    listing       : FAILED ({details['listing_error']})")
+        elif "listing_count" in details:
+            print(f"    listing       : {details['listing_count']} entries")
+        if details.get("listing"):
+            print("    directory     :")
+            for line in details["listing"]:
+                print(f"      {line}")
+        if details.get("transcript"):
+            print("    conversation  :")
+            for direction, line in details["transcript"]:
+                arrow = "C ->" if direction == ">" else "S <-"
+                print(f"      {arrow} {line}")
 
     if protocol == "rdp":
         if details.get("negotiated_protocol"):
@@ -1537,9 +1821,9 @@ def build_parser():
     parser.add_argument("--timeout", type=float, default=3.0,
                          help="timeout in seconds (default: 3)")
     parser.add_argument("--user", default=None,
-                         help="username for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps only)")
+                         help="username for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps/ftp/http/https only)")
     parser.add_argument("--password", default=None,
-                         help="password for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps only)")
+                         help="password for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps/ftp/http/https only)")
     parser.add_argument("--check-chain", action="store_true",
                          help="fetch and validate the FULL certificate chain (leaf + every "
                               "intermediate, not just the leaf), reporting each certificate's "
@@ -1574,12 +1858,25 @@ def main():
         parser.error(f"protocol '{args.protocol}' has no default port, please specify --port")
 
     extra = {}
-    if args.protocol in ("smtp", "smtps", "pop3", "pop3s", "imap", "imaps"):
+    if args.protocol in ("smtp", "smtps", "pop3", "pop3s", "imap", "imaps", "ftp"):
         extra = {"user": args.user, "password": args.password}
     elif args.protocol == "https":
-        extra = {"check_chain": args.check_chain}
+        extra = {"check_chain": args.check_chain, "user": args.user, "password": args.password}
+    elif args.protocol == "http":
+        extra = {"user": args.user, "password": args.password}
+
+    if args.verbose:
+        local_ip = get_public_ip(min(args.timeout, 3))
+        print(f"[LOCAL INFO] this machine's public IP: {local_ip or 'could not be determined'}")
 
     for ip in args.targets:
+        if args.verbose and not _is_ip_literal(ip):
+            try:
+                resolved = socket.gethostbyname(ip)
+                print(f"{ip:<16} [DNS  INFO] target resolves to public IP {resolved}")
+            except socket.gaierror as e:
+                print(f"{ip:<16} [DNS  FAIL] could not resolve: {e}")
+
         if args.ping:
             ok, msg = ping(ip, timeout=min(args.timeout, 2))
             status = "OK  " if ok else "FAIL"
@@ -1596,7 +1893,7 @@ def main():
             target_port = parsed.port or 443
             print(f"{ip:<16} [HTTP->HTTPS] redirect detected -> testing {target_host}:{target_port}")
             run_and_print("https", target_host, target_port, args.timeout, args.verbose,
-                          check_chain=args.check_chain)
+                          check_chain=args.check_chain, user=args.user, password=args.password)
 
 
 if __name__ == "__main__":
