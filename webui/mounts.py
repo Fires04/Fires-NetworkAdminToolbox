@@ -26,11 +26,18 @@ def discover_apps():
     apps/<name> temporarily on sys.path so the module's own internal
     imports (e.g. `import switch_viz`) resolve.
 
-    Note: since this loads every app's entry-point module into the same
-    process, two apps that both used an identically-named internal
-    package (e.g. both had their own top-level `web` package) would
-    collide in sys.modules. Not a concern with a single app registered;
-    worth revisiting if that ever happens.
+    Every app's entry-point module is imported into the same process, and
+    the natural name for an app's own web-serving package is just `web` --
+    unsurprisingly, more than one app here independently picked exactly
+    that. Without care, the second and third such app wouldn't get their
+    own module imported at all: Python caches `web` in sys.modules after
+    the first import, so `importlib.import_module("web.app")` for the next
+    app would silently hand back the *first* app's already-cached module,
+    and every app mounted after that would end up serving the first app's
+    page. To avoid that, every module newly added to sys.modules during one
+    app's import is discarded again right after grabbing that app's ASGI
+    object out of it -- the object itself keeps working fine (it's already
+    in hand), but the *name* is free again for the next app to import under.
     """
     apps = {}
     if not APPS_DIR.is_dir():
@@ -46,14 +53,18 @@ def discover_apps():
 
         module_path, _, attr = cfg["app"].partition(":")
         sys.path.insert(0, str(entry))
+        modules_before = set(sys.modules)
         try:
             module = importlib.import_module(module_path)
+            app_obj = getattr(module, attr)
         finally:
             sys.path.remove(str(entry))
+            for name in set(sys.modules) - modules_before:
+                del sys.modules[name]
 
         apps[entry.name] = {
             "description": cfg.get("description", ""),
             "dir": entry,
-            "app": getattr(module, attr),
+            "app": app_obj,
         }
     return apps

@@ -181,6 +181,23 @@ of `cli_scripts/protocol_tester.py --check-chain` -- both solve overlapping
 problems by shelling out to `openssl`, but share no code, per the
 "drop-in-a-folder, no other code changes" spirit of `apps/`.
 
+`apps/panos-filter-builder/` ("PAN-OS Filter Builder") builds a PAN-OS
+Traffic log filter (Monitor > Logs > Traffic) from multiple fields --
+address, zone, port, app, action, protocol, bytes/packets, session end
+reason, user, and a free-form custom field -- combined across as many
+filter blocks as needed with AND/OR, instead of hand-typing the query
+string. Per-block "join multiple values with AND/OR" reproduces the
+GUI's own behavior for repeated values on one field. Address values that
+aren't a literal IP/CIDR/range are treated as a named Address/Address-Group
+object and quoted accordingly; text values are quoted only when they
+actually need it (contain whitespace or other characters PAN-OS wouldn't
+parse bare). Everything -- the field catalog, validation, and filter-string
+generation -- runs client-side; the FastAPI app just serves the page.
+Saved filters live in the browser's own `localStorage`, per browser/device.
+Traffic-log fields only for now; extending the same field-catalog/block
+builder to other log types (Threat, URL Filtering, ...) is a natural
+follow-up, not yet done.
+
 ### Adding an app module
 
 1. Drop the project under `apps/<name>/`, with its own ASGI application

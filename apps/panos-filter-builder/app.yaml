@@ -1,0 +1,2 @@
+description: "Build a PAN-OS Traffic log filter (Monitor > Logs > Traffic) from multiple fields -- address, zone, port, app, action, bytes, and more -- combined with AND/OR, instead of typing the query by hand."
+app: "web.app:app"

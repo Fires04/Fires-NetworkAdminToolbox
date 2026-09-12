@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAN-OS Filter Builder</title>
+<style>
+  :root {
+    --bg: #16181c; --panel: #1f2328; --border: #343a40; --text: #e9ecef;
+    --muted: #8d97a1; --accent: #4dabf7; --ok: #51cf66; --warn: #ffa94d; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .subtitle { color: var(--muted); margin: 0 0 1.25rem; font-size: .92rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.25rem 1.4rem; max-width: 980px; margin: 0 auto 1.2rem;
+  }
+  label { display: block; font-size: .78rem; color: var(--muted); margin: 0 0 .3rem; text-transform: uppercase; letter-spacing: .4px; }
+  select, input[type=text], textarea {
+    width: 100%; background: #14171a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: .5rem .6rem; font-size: .88rem; outline: none;
+  }
+  select:focus, input[type=text]:focus, textarea:focus { border-color: var(--accent); }
+  textarea { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: .82rem; resize: vertical; min-height: 64px; }
+  select { cursor: pointer; }
+  button {
+    background: var(--accent); color: #06202f; border: none; border-radius: 6px;
+    padding: .5rem 1rem; font-size: .85rem; font-weight: 600; cursor: pointer; transition: .15s;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.secondary { background: #2a2f36; color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: #3a2020; color: var(--bad); border: 1px solid #5a2a2a; }
+  button.icon { padding: .35rem .55rem; font-size: .8rem; line-height: 1; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* top-level controls */
+  .top-controls { display: flex; align-items: flex-end; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .top-controls .field-group { flex: 0 0 220px; }
+  .top-controls .hint { color: var(--muted); font-size: .8rem; flex: 1; min-width: 220px; padding-bottom: .55rem; }
+
+  /* blocks */
+  #blocks { display: flex; flex-direction: column; }
+  .connector-row { display: flex; align-items: center; gap: .6rem; margin: .5rem 0; padding-left: .2rem; }
+  .connector-row select { width: 90px; font-weight: 600; }
+  .connector-row::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+  .block {
+    border: 1px solid var(--border); border-radius: 8px; padding: 2.2rem 1rem .9rem;
+    background: #191c21; display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 1.2rem;
+    position: relative;
+  }
+  .block .field-col { display: flex; flex-direction: column; gap: .6rem; }
+  .block .value-col { display: flex; flex-direction: column; }
+  .value-col .col-hint { font-size: .74rem; color: var(--muted); text-transform: none; letter-spacing: 0; margin: -.15rem 0 .4rem; }
+  .block-actions { display: flex; gap: .3rem; position: absolute; top: .6rem; right: .6rem; }
+  .block-join-row { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; font-size: .78rem; color: var(--muted); }
+  .block-join-row select { width: 80px; }
+  .chips { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
+  .chip {
+    background: #22262d; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 12px; padding: .15rem .6rem; font-size: .74rem; cursor: pointer; transition: .15s;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
+  .invalid-note { color: var(--warn); font-size: .76rem; margin-top: .3rem; }
+
+  #addBlockRow { margin-top: .8rem; display: flex; gap: .6rem; }
+
+  .divider { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .8rem; margin: 1.3rem 0 1rem; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+  .output-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: .5rem; }
+  .output-label label { margin: 0; }
+  .output-btns { display: flex; gap: .4rem; }
+  .output-box {
+    background: #101216; border: 1px solid var(--border); border-radius: 6px;
+    padding: .9rem 1rem; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: .86rem;
+    min-height: 3rem; word-break: break-all; white-space: pre-wrap; line-height: 1.5;
+  }
+  .output-box.empty { color: #454b52; font-style: italic; }
+  .tok-field { color: #82aaff; } .tok-op { color: #89ddff; } .tok-value { color: #c3e88d; }
+  .tok-keyword { color: #c792ea; font-weight: 600; } .tok-paren { color: #ffcb6b; }
+
+  #explainBox { font-size: .84rem; color: var(--muted); margin-top: .7rem; }
+  #explainBox ul { margin: .3rem 0 0 1.1rem; padding: 0; }
+  #explainBox li { margin-bottom: .2rem; }
+  #explainBox b { color: var(--text); }
+
+  #warnBox {
+    margin-top: .7rem; font-size: .82rem; color: var(--warn);
+    border: 1px solid #4a3a1a; background: #262013; border-radius: 6px; padding: .6rem .8rem;
+    display: none;
+  }
+
+  .presets-row { display: flex; align-items: flex-end; gap: .6rem; margin-top: 1rem; flex-wrap: wrap; }
+  .presets-row .field-group { flex: 1; min-width: 200px; }
+  .presets-row .btns { display: flex; gap: .4rem; }
+
+  .copied { background: var(--ok) !important; color: #06210d !important; }
+</style>
+</head>
+<body>
+
+<h1>PAN-OS Filter Builder</h1>
+<p class="subtitle">Monitor &rarr; Logs &rarr; Traffic &mdash; multi-field query builder (address, zone, port, app, action, bytes, and more)</p>
+
+<div class="card">
+  <div class="top-controls">
+    <div class="field-group">
+      <label for="prependOp">Prepend to existing filter</label>
+      <select id="prependOp">
+        <option value="">&mdash; none &mdash;</option>
+        <option value="and">and</option>
+        <option value="or">or</option>
+      </select>
+    </div>
+    <div class="hint">Use this when pasting after an existing filter expression already in the log view's filter bar.</div>
+  </div>
+
+  <div id="blocks"></div>
+
+  <div id="addBlockRow">
+    <button class="secondary" id="addBlockBtn" type="button">+ Add field</button>
+    <button class="secondary" id="resetBtn" type="button">Reset all</button>
+  </div>
+
+  <div class="divider">Generated filter</div>
+
+  <div class="output-label">
+    <label>Filter string</label>
+    <div class="output-btns">
+      <button class="secondary icon" id="copyBtn" type="button">Copy</button>
+      <button class="secondary icon" id="downloadBtn" type="button">Download .txt</button>
+    </div>
+  </div>
+  <div class="output-box empty" id="output">Add a field above to generate the filter&hellip;</div>
+  <div id="warnBox"></div>
+  <div id="explainBox"></div>
+
+  <div class="divider">Saved filters</div>
+  <div class="presets-row">
+    <div class="field-group">
+      <label for="presetSelect">Load saved filter</label>
+      <select id="presetSelect"><option value="">&mdash; none saved &mdash;</option></select>
+    </div>
+    <div class="btns">
+      <button class="secondary" id="saveBtn" type="button">Save current&hellip;</button>
+      <button class="danger" id="deleteBtn" type="button" disabled>Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────────────
+ * Field catalog -- Traffic log (Monitor > Logs > Traffic) only for now.
+ * type: "ip" | "num" | "text" | "enum"
+ * ops:  which of eq/neq/gt/geq/lt/leq/in/notin make sense for this field.
+ * values: known values shown as quick-add chips under the textarea
+ *         (still free text underneath -- chips are a shortcut, not a cap).
+ * ──────────────────────────────────────────────────────────────────────── */
+const OP_LABELS = { eq: 'eq', neq: 'neq', gt: 'gt', geq: 'geq', lt: 'lt', leq: 'leq', in: 'in', notin: 'notin' };
+const OP_WORDS  = { eq: 'is', neq: 'is not', gt: '>', geq: '≥', lt: '<', leq: '≤', in: 'is in', notin: 'is not in' };
+
+const FIELD_GROUPS = [
+  { label: 'Address', fields: ['addr.src', 'addr.dst', 'natsrc', 'natdst'] },
+  { label: 'Zone / User', fields: ['zone.src', 'zone.dst', 'srcuser', 'dstuser'] },
+  { label: 'Port', fields: ['port.src', 'port.dst', 'natsport', 'natdport'] },
+  { label: 'Application / Rule', fields: ['app', 'rule', 'category'] },
+  { label: 'Action / Result', fields: ['action', 'proto', 'session_end_reason', 'nat'] },
+  { label: 'Counters', fields: ['bytes', 'bytes_sent', 'bytes_received', 'packets'] },
+  { label: 'Other', fields: ['vsys', 'custom'] },
+];
+
+const FIELDS = {
+  'addr.src':  { label: 'Source Address',       type: 'ip',  ops: ['in', 'notin'] },
+  'addr.dst':  { label: 'Destination Address',  type: 'ip',  ops: ['in', 'notin'] },
+  'natsrc':    { label: 'NAT Source Address',   type: 'ip',  ops: ['in', 'notin'] },
+  'natdst':    { label: 'NAT Destination Address', type: 'ip', ops: ['in', 'notin'] },
+
+  'zone.src':  { label: 'Source Zone',      type: 'text', ops: ['eq', 'neq'] },
+  'zone.dst':  { label: 'Destination Zone', type: 'text', ops: ['eq', 'neq'] },
+  'srcuser':   { label: 'Source User',      type: 'text', ops: ['eq', 'neq'] },
+  'dstuser':   { label: 'Destination User', type: 'text', ops: ['eq', 'neq'] },
+
+  'port.src':   { label: 'Source Port',      type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'], port: true },
+  'port.dst':   { label: 'Destination Port', type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'], port: true },
+  'natsport':   { label: 'NAT Source Port',      type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'], port: true },
+  'natdport':   { label: 'NAT Destination Port', type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'], port: true },
+
+  'app':      { label: 'Application', type: 'text', ops: ['eq', 'neq'],
+                values: ['web-browsing', 'ssl', 'dns', 'ssh', 'ping', 'ms-office365-base'] },
+  'rule':     { label: 'Rule Name',   type: 'text', ops: ['eq', 'neq'] },
+  'category': { label: 'URL Category', type: 'text', ops: ['eq', 'neq'] },
+
+  'action':   { label: 'Action', type: 'enum', ops: ['eq', 'neq'],
+                values: ['allow', 'deny', 'drop', 'reset-client', 'reset-server', 'reset-both'] },
+  'proto':    { label: 'IP Protocol', type: 'enum', ops: ['eq', 'neq'],
+                values: [{ v: '6', l: '6 (tcp)' }, { v: '17', l: '17 (udp)' }, { v: '1', l: '1 (icmp)' }] },
+  'session_end_reason': { label: 'Session End Reason', type: 'enum', ops: ['eq', 'neq'],
+                values: ['unknown', 'threat', 'finished', 'aged-out', 'tcp-rst-from-client',
+                         'tcp-rst-from-server', 'resources-unavailable', 'tcp-fin', 'tcp-reuse',
+                         'decoder', 'decrypt-cert-validation', 'decrypt-unsupport-param', 'decrypt-error'] },
+  'nat':      { label: 'NAT', type: 'enum', ops: ['eq', 'neq'], values: ['yes', 'no'] },
+
+  'bytes':          { label: 'Total Bytes',    type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'] },
+  'bytes_sent':     { label: 'Bytes Sent',     type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'] },
+  'bytes_received': { label: 'Bytes Received', type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'] },
+  'packets':        { label: 'Packets',        type: 'num', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq'] },
+
+  'vsys':   { label: 'Virtual System', type: 'text', ops: ['eq', 'neq'] },
+  'custom': { label: 'Custom field…', type: 'text', ops: ['eq', 'neq', 'gt', 'geq', 'lt', 'leq', 'in', 'notin'], custom: true },
+};
+
+const DEFAULT_OP = { ip: 'in', num: 'eq', text: 'eq', enum: 'eq' };
+
+/* ────────────────────────────────────────────────────────────────────────
+ * State: an array of blocks, plus one connector ('and'/'or') between each
+ * consecutive pair. blocks[i] = { field, customName, op, joinOp, raw }
+ * ──────────────────────────────────────────────────────────────────────── */
+let blocks = [];
+let connectors = [];
+
+function newBlock(field) {
+  field = field || 'addr.dst';
+  return { field, customName: '', op: DEFAULT_OP[FIELDS[field].type], joinOp: 'or', raw: '' };
+}
+
+function addBlock(field) {
+  blocks.push(newBlock(field));
+  if (blocks.length > 1) connectors.push('and');
+  render();
+}
+
+function removeBlock(i) {
+  blocks.splice(i, 1);
+  if (connectors.length) connectors.splice(Math.max(0, i - 1), 1);
+  if (blocks.length === 0) addBlock();
+  else render();
+}
+
+function moveBlock(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= blocks.length) return;
+  [blocks[i], blocks[j]] = [blocks[j], blocks[i]];
+  render();
+}
+
+/* ── validation / value formatting ────────────────────────────────────── */
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const SIMPLE_TOKEN = /^[A-Za-z0-9_.\-\/]+$/;
+
+function validIPv4(s) {
+  const m = s.match(IPV4);
+  if (!m) return false;
+  return m.slice(1).every(o => Number(o) >= 0 && Number(o) <= 255);
+}
+function validIPv4CIDR(s) {
+  const parts = s.split('/');
+  if (parts.length !== 2) return false;
+  const bits = Number(parts[1]);
+  return validIPv4(parts[0]) && Number.isInteger(bits) && bits >= 0 && bits <= 32;
+}
+function validIPv4Range(s) {
+  const parts = s.split('-');
+  return parts.length === 2 && validIPv4(parts[0]) && validIPv4(parts[1]);
+}
+function validIPv6ish(s) { return /^[0-9a-fA-F:]+(\/\d{1,3})?$/.test(s) && s.includes(':'); }
+
+/* Returns {ok, formatted, note} for one raw value line, given a field's type. */
+function formatValue(type, isPort, raw) {
+  const v = raw.trim();
+  if (!v) return null;
+
+  if (type === 'ip') {
+    if (validIPv4(v) || validIPv4CIDR(v) || validIPv4Range(v) || validIPv6ish(v)) {
+      return { ok: true, formatted: v };
+    }
+    // Not a literal address -- treat as a named Address/Address-Group object.
+    return { ok: true, formatted: `'${v.replace(/'/g, "\\'")}'`, note: 'treated as address object name' };
+  }
+
+  if (type === 'num') {
+    if (!/^-?\d+$/.test(v)) return { ok: false, note: 'not a whole number' };
+    if (isPort) {
+      const n = Number(v);
+      if (n < 0 || n > 65535) return { ok: false, note: 'out of port range (0-65535)' };
+    }
+    return { ok: true, formatted: v };
+  }
+
+  // text / enum / custom -- bare if it's a simple token, quoted otherwise
+  // (spaces, wildcards, anything PAN-OS would need quoted to parse safely).
+  return { ok: true, formatted: SIMPLE_TOKEN.test(v) ? v : `'${v.replace(/'/g, "\\'")}'` };
+}
+
+/* ── filter generation ────────────────────────────────────────────────── */
+function buildBlockClause(block) {
+  const meta = FIELDS[block.field];
+  const fieldName = block.field === 'custom' ? block.customName.trim() : block.field;
+  if (!fieldName) return null;
+
+  const lines = block.raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  const valid = [];
+  const invalid = [];
+  for (const line of lines) {
+    const r = formatValue(meta.type, !!meta.port, line);
+    if (r && r.ok) valid.push(r.formatted);
+    else invalid.push(`${line} (${(r && r.note) || 'invalid'})`);
+  }
+  if (valid.length === 0) return { clause: null, invalid, fieldName, values: [] };
+
+  const subs = valid.map(v => `( ${fieldName} ${block.op} ${v} )`);
+  const clause = subs.length > 1 ? `( ${subs.join(` ${block.joinOp} `)} )` : subs[0];
+  return { clause, invalid, fieldName, meta, op: block.op, joinOp: block.joinOp, values: valid };
+}
+
+function buildFilter() {
+  const parts = blocks.map(buildBlockClause);
+  const prependOp = document.getElementById('prependOp').value;
+
+  const usable = [];
+  const allInvalid = [];
+  parts.forEach((p, i) => {
+    if (p.clause) usable.push({ clause: p.clause, connectorBefore: usable.length > 0 ? connectors[i - 1] : null, part: p });
+    if (p.invalid.length) allInvalid.push({ field: p.fieldName || `(field #${i + 1})`, lines: p.invalid });
+  });
+
+  let filterStr = usable.map((u, i) => (i === 0 ? '' : ` ${u.connectorBefore} `) + u.clause).join('');
+  if (filterStr && prependOp) filterStr = `${prependOp} ${filterStr}`;
+
+  return { filterStr, invalid: allInvalid, parts: usable.map(u => u.part) };
+}
+
+/* ── rendering: blocks ────────────────────────────────────────────────── */
+function fieldOptionsHTML(selected) {
+  return FIELD_GROUPS.map(g => {
+    const opts = g.fields.map(f =>
+      `<option value="${f}" ${f === selected ? 'selected' : ''}>${FIELDS[f].label}</option>`).join('');
+    return `<optgroup label="${g.label}">${opts}</optgroup>`;
+  }).join('');
+}
+
+function opOptionsHTML(field, selected) {
+  return FIELDS[field].ops.map(o =>
+    `<option value="${o}" ${o === selected ? 'selected' : ''}>${OP_LABELS[o]}</option>`).join('');
+}
+
+function chipsHTML(field) {
+  const meta = FIELDS[field];
+  if (!meta.values) return '';
+  const chips = meta.values.map(v => {
+    const val = typeof v === 'string' ? v : v.v;
+    const lbl = typeof v === 'string' ? v : v.l;
+    return `<span class="chip" data-val="${val}">${lbl}</span>`;
+  }).join('');
+  return `<div class="chips">${chips}</div>`;
+}
+
+function render() {
+  const container = document.getElementById('blocks');
+  container.innerHTML = '';
+
+  blocks.forEach((block, i) => {
+    if (i > 0) {
+      const row = document.createElement('div');
+      row.className = 'connector-row';
+      row.innerHTML = `<select data-conn="${i - 1}">
+          <option value="and" ${connectors[i - 1] === 'and' ? 'selected' : ''}>AND</option>
+          <option value="or" ${connectors[i - 1] === 'or' ? 'selected' : ''}>OR</option>
+        </select>`;
+      container.appendChild(row);
+    }
+
+    const meta = FIELDS[block.field];
+    const div = document.createElement('div');
+    div.className = 'block';
+    div.dataset.idx = i;
+    div.innerHTML = `
+      <div class="block-actions">
+        <button class="secondary icon" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>&uarr;</button>
+        <button class="secondary icon" data-act="down" title="Move down" ${i === blocks.length - 1 ? 'disabled' : ''}>&darr;</button>
+        <button class="danger icon" data-act="remove" title="Remove">&times;</button>
+      </div>
+      <div class="field-col">
+        <div>
+          <label>Field</label>
+          <select data-role="field">${fieldOptionsHTML(block.field)}</select>
+        </div>
+        ${meta.custom ? `<div><label>Field name</label><input type="text" data-role="customName" placeholder="e.g. tunnelid" value="${block.customName}"></div>` : ''}
+        <div>
+          <label>Operator</label>
+          <select data-role="op">${opOptionsHTML(block.field, block.op)}</select>
+        </div>
+      </div>
+      <div class="value-col">
+        <label>Value</label>
+        <div class="col-hint">${meta.type === 'ip' ? 'IP, CIDR, range, or address-object name — one per line' : 'One value per line'}</div>
+        <textarea data-role="raw" placeholder="${meta.type === 'ip' ? '10.1.1.1\n192.168.0.0/24\nMy-Address-Object' : 'value1\nvalue2'}">${block.raw}</textarea>
+        ${chipsHTML(block.field)}
+        <div class="block-join-row">
+          Join multiple values with
+          <select data-role="joinOp">
+            <option value="or" ${block.joinOp === 'or' ? 'selected' : ''}>OR</option>
+            <option value="and" ${block.joinOp === 'and' ? 'selected' : ''}>AND</option>
+          </select>
+        </div>
+      </div>`;
+    container.appendChild(div);
+  });
+
+  wireBlockEvents();
+  generate();
+}
+
+function wireBlockEvents() {
+  document.querySelectorAll('[data-conn]').forEach(sel => {
+    sel.addEventListener('change', e => {
+      connectors[Number(e.target.dataset.conn)] = e.target.value;
+      generate();
+    });
+  });
+
+  document.querySelectorAll('.block').forEach(el => {
+    const i = Number(el.dataset.idx);
+
+    el.querySelector('[data-role=field]').addEventListener('change', e => {
+      blocks[i].field = e.target.value;
+      blocks[i].op = DEFAULT_OP[FIELDS[blocks[i].field].type];
+      render();
+    });
+    const customInput = el.querySelector('[data-role=customName]');
+    if (customInput) customInput.addEventListener('input', e => { blocks[i].customName = e.target.value; generate(); });
+
+    el.querySelector('[data-role=op]').addEventListener('change', e => { blocks[i].op = e.target.value; generate(); });
+    el.querySelector('[data-role=raw]').addEventListener('input', e => { blocks[i].raw = e.target.value; generate(); });
+    el.querySelector('[data-role=joinOp]').addEventListener('change', e => { blocks[i].joinOp = e.target.value; generate(); });
+
+    el.querySelectorAll('.chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const ta = el.querySelector('[data-role=raw]');
+        const val = chip.dataset.val;
+        const lines = ta.value.split('\n').filter(l => l.trim());
+        if (!lines.includes(val)) lines.push(val);
+        ta.value = lines.join('\n');
+        blocks[i].raw = ta.value;
+        generate();
+      });
+    });
+
+    el.querySelectorAll('[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const act = btn.dataset.act;
+        if (act === 'remove') removeBlock(i);
+        else if (act === 'up') moveBlock(i, -1);
+        else if (act === 'down') moveBlock(i, 1);
+      });
+    });
+  });
+}
+
+/* ── rendering: output + explain + warnings ──────────────────────────── */
+function highlight(str) {
+  return str
+    .replace(/\(/g, '<span class="tok-paren">(</span>')
+    .replace(/\)/g, '<span class="tok-paren">)</span>')
+    .replace(/\b(and|or)\b/g, '<span class="tok-keyword">$1</span>')
+    .replace(/\b(eq|neq|gt|geq|lt|leq|in|notin)\b/g, '<span class="tok-op">$1</span>');
+}
+
+function generate() {
+  const { filterStr, invalid, parts } = buildFilter();
+  const out = document.getElementById('output');
+  const warnBox = document.getElementById('warnBox');
+  const explainBox = document.getElementById('explainBox');
+
+  if (!filterStr) {
+    out.className = 'output-box empty';
+    out.textContent = 'Add a field above to generate the filter…';
+  } else {
+    out.className = 'output-box';
+    out.innerHTML = highlight(filterStr);
+  }
+
+  if (invalid.length) {
+    warnBox.style.display = 'block';
+    warnBox.innerHTML = '<b>Skipped invalid values:</b><br>' +
+      invalid.map(g => `${g.field}: ${g.lines.join('; ')}`).join('<br>');
+  } else {
+    warnBox.style.display = 'none';
+    warnBox.innerHTML = '';
+  }
+
+  if (parts.length) {
+    explainBox.innerHTML = '<b>In plain words:</b><ul>' +
+      parts.map(p => {
+        const joinNote = p.values.length > 1 ? ` (${p.joinOp.toUpperCase()})` : '';
+        return `<li><b>${p.meta.label}</b> ${OP_WORDS[p.op]}: ${p.values.join(', ')}${joinNote}</li>`;
+      }).join('') + '</ul>';
+  } else {
+    explainBox.innerHTML = '';
+  }
+
+  return filterStr;
+}
+
+/* ── copy / download ──────────────────────────────────────────────────── */
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const text = generate();
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+  });
+});
+
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  const text = generate();
+  if (!text) return;
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'panos-filter.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('prependOp').addEventListener('change', generate);
+document.getElementById('addBlockBtn').addEventListener('click', () => addBlock());
+document.getElementById('resetBtn').addEventListener('click', () => {
+  blocks = []; connectors = [];
+  document.getElementById('prependOp').value = '';
+  addBlock();
+});
+
+/* ── saved presets (localStorage, per-browser) ───────────────────────── */
+const PRESET_KEY = 'panosFilterBuilder.presets';
+
+function loadPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESET_KEY) || '[]'); }
+  catch { return []; }
+}
+function savePresets(list) {
+  try { localStorage.setItem(PRESET_KEY, JSON.stringify(list)); } catch {}
+}
+function refreshPresetSelect() {
+  const sel = document.getElementById('presetSelect');
+  const presets = loadPresets();
+  sel.innerHTML = '<option value="">— none saved —</option>' +
+    presets.map((p, i) => `<option value="${i}">${p.name}</option>`).join('');
+  document.getElementById('deleteBtn').disabled = presets.length === 0;
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  const name = prompt('Name this filter:');
+  if (!name) return;
+  const presets = loadPresets();
+  presets.push({
+    name,
+    prependOp: document.getElementById('prependOp').value,
+    blocks: JSON.parse(JSON.stringify(blocks)),
+    connectors: JSON.parse(JSON.stringify(connectors)),
+  });
+  savePresets(presets);
+  refreshPresetSelect();
+  document.getElementById('presetSelect').value = String(presets.length - 1);
+});
+
+document.getElementById('presetSelect').addEventListener('change', e => {
+  const idx = e.target.value;
+  document.getElementById('deleteBtn').disabled = idx === '';
+  if (idx === '') return;
+  const preset = loadPresets()[Number(idx)];
+  if (!preset) return;
+  blocks = JSON.parse(JSON.stringify(preset.blocks));
+  connectors = JSON.parse(JSON.stringify(preset.connectors));
+  document.getElementById('prependOp').value = preset.prependOp || '';
+  render();
+});
+
+document.getElementById('deleteBtn').addEventListener('click', () => {
+  const sel = document.getElementById('presetSelect');
+  const idx = Number(sel.value);
+  if (Number.isNaN(idx)) return;
+  const presets = loadPresets();
+  presets.splice(idx, 1);
+  savePresets(presets);
+  refreshPresetSelect();
+});
+
+/* ── boot ─────────────────────────────────────────────────────────────── */
+addBlock('addr.src');
+addBlock('addr.dst');
+connectors[0] = 'and';
+render();
+refreshPresetSelect();
+</script>
+
+</body>
+</html>
