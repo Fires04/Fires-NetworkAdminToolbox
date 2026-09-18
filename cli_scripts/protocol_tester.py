@@ -77,6 +77,28 @@ def _is_ip_literal(host):
         return False
 
 
+def _split_target_path(target):
+    """Split an optional path off a CLI target, returning (host, path).
+
+    Accepts a bare host/IP ("example.com"), a full URL with a path
+    ("https://example.com/health", "http://example.com:8080/health") or a
+    scheme-less "host/path" shorthand. `path` defaults to "/" when the
+    target carries none; only the http/https tests use it, everything else
+    ignores it.
+    """
+    if "://" in target:
+        parsed = urllib.parse.urlsplit(target)
+        host = parsed.hostname or parsed.netloc
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        return host, path
+    slash = target.find("/")
+    if slash == -1:
+        return target, "/"
+    return target[:slash], target[slash:]
+
+
 def get_public_ip(timeout):
     """Best-effort lookup of this machine's own public (outbound) IP
     address, by asking a well-known IP-echo service (first one that answers
@@ -408,9 +430,10 @@ def test_tcp(ip, port, timeout, **kwargs):
         return False, f"connection error: {e}", {}
 
 
-def _http_probe(connect, ip, timeout, user=None, password=None):
-    """Send a HEAD / request via `connect()` (a zero-arg callable returning a
-    fresh, ready-to-use socket -- plain for HTTP, TLS-wrapped for HTTPS).
+def _http_probe(connect, ip, timeout, user=None, password=None, path="/"):
+    """Send a HEAD `path` request via `connect()` (a zero-arg callable
+    returning a fresh, ready-to-use socket -- plain for HTTP, TLS-wrapped
+    for HTTPS).
 
     If the first (unauthenticated) response is 401 Unauthorized and --user/
     --password were supplied, retries once with an HTTP Basic Authorization
@@ -427,7 +450,7 @@ def _http_probe(connect, ip, timeout, user=None, password=None):
         s = connect()
         try:
             s.settimeout(timeout)
-            req = f"HEAD / HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n"
+            req = f"HEAD {path} HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n"
             if auth_header:
                 req += f"Authorization: {auth_header}\r\n"
             req += "\r\n"
@@ -455,7 +478,7 @@ def _http_probe(connect, ip, timeout, user=None, password=None):
     return True, status_code, status_line, headers, auth_result, resp
 
 
-def test_http(ip, port, timeout, user=None, password=None, **kwargs):
+def test_http(ip, port, timeout, user=None, password=None, path="/", **kwargs):
     """HTTP: TCP connect + minimal HEAD request, checks for a valid status line.
 
     If the server answers with a 3xx redirect to an https:// URL, this is
@@ -466,7 +489,7 @@ def test_http(ip, port, timeout, user=None, password=None, **kwargs):
     """
     try:
         matched, status_code, status_line, headers, auth_result, resp = _http_probe(
-            lambda: socket.create_connection((ip, port), timeout=timeout), ip, timeout, user, password)
+            lambda: socket.create_connection((ip, port), timeout=timeout), ip, timeout, user, password, path)
     except socket.timeout:
         return False, "timed out (no TCP connection / no HTTP response)", {}
     except ConnectionRefusedError:
@@ -495,7 +518,7 @@ def test_http(ip, port, timeout, user=None, password=None, **kwargs):
     return True, msg, details
 
 
-def test_https(ip, port, timeout, check_chain=False, user=None, password=None, **kwargs):
+def test_https(ip, port, timeout, check_chain=False, user=None, password=None, path="/", **kwargs):
     """HTTPS: TLS handshake + certificate validity/trust check + HEAD request.
 
     With check_chain=True (--check-chain), also fetches the full certificate
@@ -532,7 +555,7 @@ def test_https(ip, port, timeout, check_chain=False, user=None, password=None, *
     auth_result = None
     try:
         matched, status_code, status_line, headers, auth_result, _resp = _http_probe(
-            _connect_tls, ip, timeout, user, password)
+            _connect_tls, ip, timeout, user, password, path)
         if not matched:
             status_code, status_line, headers = None, None, {}
         elif status_code and 300 <= status_code < 400 and 'location' in headers:
@@ -1830,7 +1853,10 @@ def build_parser():
                               "subject/issuer/expiry and any chain verification errors (https "
                               "only; requires the openssl CLI)")
     parser.add_argument("targets", nargs="*", metavar="IP",
-                         help="one or more IP addresses / hostnames to test")
+                         help="one or more IP addresses / hostnames to test; for http/https "
+                              "a path can be included (e.g. example.com/health or "
+                              "https://example.com/health), which is used instead of / "
+                              "for the HEAD request")
     if clidescribe:
         clidescribe.add_describe_flag(parser)
     return parser
@@ -1869,7 +1895,12 @@ def main():
         local_ip = get_public_ip(min(args.timeout, 3))
         print(f"[LOCAL INFO] this machine's public IP: {local_ip or 'could not be determined'}")
 
-    for ip in args.targets:
+    for raw_target in args.targets:
+        ip, path = _split_target_path(raw_target)
+        target_extra = dict(extra)
+        if args.protocol in ("http", "https"):
+            target_extra["path"] = path
+
         if args.verbose and not _is_ip_literal(ip):
             try:
                 resolved = socket.gethostbyname(ip)
@@ -1882,7 +1913,7 @@ def main():
             status = "OK  " if ok else "FAIL"
             print(f"{ip:<16} [PING {status}] {msg}")
 
-        ok, msg, details = run_and_print(args.protocol, ip, port, args.timeout, args.verbose, **extra)
+        ok, msg, details = run_and_print(args.protocol, ip, port, args.timeout, args.verbose, **target_extra)
 
         # If an HTTP test hit a redirect to https://, automatically follow up
         # with an HTTPS test against the redirect target.
@@ -1891,9 +1922,13 @@ def main():
             parsed = urllib.parse.urlsplit(location)
             target_host = parsed.hostname or ip
             target_port = parsed.port or 443
+            target_path = parsed.path or "/"
+            if parsed.query:
+                target_path += "?" + parsed.query
             print(f"{ip:<16} [HTTP->HTTPS] redirect detected -> testing {target_host}:{target_port}")
             run_and_print("https", target_host, target_port, args.timeout, args.verbose,
-                          check_chain=args.check_chain, user=args.user, password=args.password)
+                          check_chain=args.check_chain, user=args.user, password=args.password,
+                          path=target_path)
 
 
 if __name__ == "__main__":
