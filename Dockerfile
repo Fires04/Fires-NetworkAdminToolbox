@@ -31,8 +31,11 @@ RUN pip install --no-cache-dir -r webui/requirements.txt && \
     pip install --no-cache-dir ./apps/switch-visualizer && \
     pip install --no-cache-dir ./apps/cert-inspector
 
-# virtual_host_screenshot.py needs a real browser -- installs Chromium plus
-# whatever system libraries it needs to actually render pages headlessly.
+# cli_scripts/requirements.txt: paramiko (protocol_tester.py's -p sftp login
+# + directory listing -- stdlib has no SSH client) and playwright (used by
+# virtual_host_screenshot.py, which needs a real browser -- the second line
+# installs Chromium plus whatever system libraries it needs to render pages
+# headlessly).
 RUN pip install --no-cache-dir -r cli_scripts/requirements.txt && \
     playwright install --with-deps chromium
 

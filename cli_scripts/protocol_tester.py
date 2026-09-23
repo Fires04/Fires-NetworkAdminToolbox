@@ -30,6 +30,14 @@ Usage:
                                                            FTP is functional,
                                                            not just that the
                                                            control port answers)
+    protocol_tester.py -p sftp -v --user me --password secret 10.83.225.46
+                                                           (SSH banner only
+                                                           without --user/
+                                                           --password; with
+                                                           them, logs in and
+                                                           lists the current
+                                                           directory -- requires
+                                                           the paramiko package)
     protocol_tester.py -p https -v --user me --password secret example.com
                                                            (retries with HTTP
                                                            Basic auth if the
@@ -58,6 +66,10 @@ try:
     import clidescribe  # optional: enables `--describe` (see clidescribe.py)
 except ImportError:
     clidescribe = None
+try:
+    import paramiko  # optional: enables -p sftp (no stdlib SSH client)
+except ImportError:
+    paramiko = None
 import tempfile
 import urllib.parse
 import urllib.request
@@ -817,6 +829,80 @@ def test_ftp(ip, port, timeout, user=None, password=None, **kwargs):
         return False, f"connection error: {e}", {"transcript": transcript}
 
 
+def test_sftp(ip, port, timeout, user=None, password=None, **kwargs):
+    """SFTP: TCP connect, reads the SSH version banner.
+
+    If --user/--password are supplied, also authenticates over SSH and, on
+    success, opens the SFTP subsystem and lists the current directory --
+    this is what actually proves SFTP is functional (the subsystem is
+    enabled and the credentials work), not just that an SSH server is
+    listening. Without credentials, behaves like the ssh protocol (banner
+    only). Requires the `paramiko` package.
+    """
+    if paramiko is None:
+        return False, "cannot test: the paramiko package is not installed", {}
+
+    try:
+        sock = socket.create_connection((ip, port), timeout=timeout)
+    except socket.timeout:
+        return False, "timed out (no TCP connection)", {}
+    except ConnectionRefusedError:
+        return False, "connection refused (port closed)", {}
+    except OSError as e:
+        return False, f"connection error: {e}", {}
+
+    sock.settimeout(timeout)
+    transport = paramiko.Transport(sock)
+    transport.banner_timeout = timeout
+    try:
+        transport.start_client(timeout=timeout)
+    except paramiko.SSHException as e:
+        transport.close()
+        return False, f"SSH handshake failed: {e}", {}
+
+    banner = transport.remote_version or ""
+    if not banner.startswith("SSH-"):
+        transport.close()
+        return False, "TCP open, but no SSH banner (timeout or non-SSH service)", {}
+
+    details = {"banner": banner}
+    msg = f"OK, server banner: {banner}"
+
+    if user is None or password is None:
+        transport.close()
+        return True, msg, details
+
+    try:
+        transport.auth_password(user, password)
+    except paramiko.SSHException as e:
+        details["login_result"] = f"failed ({e})"
+        msg += f", login: {details['login_result']}"
+        transport.close()
+        return True, msg, details
+
+    details["login_result"] = "success"
+    msg += ", login: success"
+
+    try:
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            entries = sftp.listdir(".")
+        finally:
+            sftp.close()
+    except Exception as e:
+        details["listing_error"] = str(e)
+        msg += f", listing failed: {e}"
+        transport.close()
+        return True, msg, details
+
+    transport.close()
+    count = len(entries)
+    details["listing"] = entries[:50]
+    details["listing_count"] = count
+    msg += f", directory listing OK, {count} entr{'y' if count == 1 else 'ies'}"
+    return True, msg, details
+
+
 def test_rdp(ip, port, timeout, **kwargs):
     """RDP: TPKT/X.224 Connection Request, checks for a Connection Confirm."""
     request = bytes([
@@ -1543,6 +1629,11 @@ PROTOCOLS = {
         "description": "FTP - TCP connect, reads the FTP greeting banner (optional --user/--password login + PASV directory listing)",
         "test": test_ftp,
     },
+    "sftp": {
+        "port": 22,
+        "description": "SFTP - TCP connect, reads the SSH version banner (optional --user/--password login + directory listing; requires paramiko)",
+        "test": test_sftp,
+    },
     "smtp": {
         "port": 25,
         "description": "SMTP (25/587) - EHLO conversation, auto-upgrades via STARTTLS if offered, optional --user/--password AUTH test",
@@ -1719,6 +1810,20 @@ def print_details(protocol, details):
                 arrow = "C ->" if direction == ">" else "S <-"
                 print(f"      {arrow} {line}")
 
+    if protocol == "sftp":
+        if details.get("banner"):
+            print(f"    banner        : {details['banner']}")
+        if details.get("login_result"):
+            print(f"    login         : {details['login_result']}")
+        if details.get("listing_error"):
+            print(f"    listing       : FAILED ({details['listing_error']})")
+        elif "listing_count" in details:
+            print(f"    listing       : {details['listing_count']} entries")
+        if details.get("listing"):
+            print("    directory     :")
+            for line in details["listing"]:
+                print(f"      {line}")
+
     if protocol == "rdp":
         if details.get("negotiated_protocol"):
             print(f"    negotiated    : {details['negotiated_protocol']}")
@@ -1844,9 +1949,9 @@ def build_parser():
     parser.add_argument("--timeout", type=float, default=3.0,
                          help="timeout in seconds (default: 3)")
     parser.add_argument("--user", default=None,
-                         help="username for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps/ftp/http/https only)")
+                         help="username for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps/ftp/sftp/http/https only)")
     parser.add_argument("--password", default=None,
-                         help="password for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps/ftp/http/https only)")
+                         help="password for login/AUTH (smtp/smtps/pop3/pop3s/imap/imaps/ftp/sftp/http/https only)")
     parser.add_argument("--check-chain", action="store_true",
                          help="fetch and validate the FULL certificate chain (leaf + every "
                               "intermediate, not just the leaf), reporting each certificate's "
@@ -1884,7 +1989,7 @@ def main():
         parser.error(f"protocol '{args.protocol}' has no default port, please specify --port")
 
     extra = {}
-    if args.protocol in ("smtp", "smtps", "pop3", "pop3s", "imap", "imaps", "ftp"):
+    if args.protocol in ("smtp", "smtps", "pop3", "pop3s", "imap", "imaps", "ftp", "sftp"):
         extra = {"user": args.user, "password": args.password}
     elif args.protocol == "https":
         extra = {"check_chain": args.check_chain, "user": args.user, "password": args.password}
