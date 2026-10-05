@@ -244,7 +244,7 @@ function render(data) {
         : st === 'ok' ? `${c.days_left}d left` : (c.parse_error ? 'parse error' : 'unknown');
       const isTop = i === chain.indices.length - 1;
       const tag = isTop ? (c.self_signed ? ' · self-signed root' : ' · ⚠ issuer not included') : '';
-      const arrow = i > 0 ? `<div class="arrow">↑ issued by</div>` : '';
+      const arrow = i > 0 ? `<div class="arrow">↓ issued by</div>` : '';
       return `${arrow}<div class="chain-node" onclick="document.getElementById('cert-${idx}').scrollIntoView({behavior:'smooth',block:'center'})">
         <span class="pill pill-${st}">${esc(label)}</span>
         <div><div class="cn">[${idx}] ${esc(shortName(c.subject))}</div><div class="sub">${esc(shortName(c.issuer))}${tag}</div></div>
