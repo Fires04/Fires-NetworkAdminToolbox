@@ -19,6 +19,14 @@ Usage:
                                                            http->https redirect
                                                            with a https test)
     protocol_tester.py -p dns 10.83.1.21
+    protocol_tester.py -p ike -v vpn.example.com           (IKEv2 IKE_SA_INIT
+                                                           probe -- checks an
+                                                           IPsec VPN's key
+                                                           exchange is alive)
+    protocol_tester.py -p udp --port 161 10.83.225.46       (generic UDP;
+                                                           a timeout is
+                                                           inconclusive, unlike
+                                                           tcp's)
     protocol_tester.py -p smb -v 10.83.225.10
     protocol_tester.py -p modbus 10.83.225.40
     protocol_tester.py -p smtp -v mail.example.com
@@ -438,6 +446,33 @@ def test_tcp(ip, port, timeout, **kwargs):
         return False, "timed out (no TCP connection)", {}
     except ConnectionRefusedError:
         return False, "connection refused (port closed)", {}
+    except OSError as e:
+        return False, f"connection error: {e}", {}
+
+
+def test_udp(ip, port, timeout, **kwargs):
+    """Generic UDP: sends an empty datagram and reports whether anything
+    comes back, or the OS surfaces an ICMP port-unreachable.
+
+    UDP has no handshake, so unlike the tcp test this can't positively
+    confirm a listening service: a service that's up but doesn't reply to
+    an empty/unrecognized payload looks identical here to one that's down
+    behind a firewall silently dropping the packet. Only two outcomes are
+    unambiguous -- a reply (something is listening) or an ICMP
+    port-unreachable (nothing is, and that was routed back to us); a plain
+    timeout is reported as inconclusive, not as "closed".
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(b"", (ip, port))
+            try:
+                resp, _ = s.recvfrom(4096)
+            except socket.timeout:
+                return False, "no response (UDP timeout) -> inconclusive: could be open and silent, or filtered", {}
+            return True, f"OK, UDP port replied ({len(resp)} bytes)", {}
+    except ConnectionRefusedError:
+        return False, "ICMP port unreachable -> port is closed", {}
     except OSError as e:
         return False, f"connection error: {e}", {}
 
@@ -1160,6 +1195,125 @@ def test_ntp(ip, port, timeout, **kwargs):
         return False, f"connection error: {e}", {}
 
 
+IKE_NOTIFY_NAMES = {
+    1: "UNSUPPORTED_CRITICAL_PAYLOAD", 4: "INVALID_IKE_SPI", 5: "INVALID_MAJOR_VERSION",
+    7: "INVALID_SYNTAX", 9: "INVALID_MESSAGE_ID", 11: "INVALID_SPI",
+    14: "NO_PROPOSAL_CHOSEN", 17: "INVALID_KE_PAYLOAD", 24: "AUTHENTICATION_FAILED",
+    34: "SINGLE_PAIR_REQUIRED", 35: "NO_ADDITIONAL_SAS", 38: "TS_UNACCEPTABLE",
+}
+IKE_PAYLOAD_NAMES = {33: "SA", 34: "KE", 35: "IDi", 36: "IDr", 37: "CERT", 38: "CERTREQ",
+                      39: "AUTH", 40: "Nonce", 41: "Notify", 43: "TSi", 44: "TSr", 46: "Encrypted"}
+
+
+def _ike_build_sa_init():
+    """Build a minimal, syntactically valid IKEv2 IKE_SA_INIT request: one
+    SA proposal (AES-CBC-128 / PRF-HMAC-SHA256 / integ-HMAC-SHA256-128 / DH
+    group 14) plus a correctly-sized-but-arbitrary KE payload and a Nonce.
+
+    A compliant IKEv2 responder answers this even though the "key exchange"
+    isn't a real one and the proposal may well get rejected -- getting any
+    valid IKE response at all is what proves the far end is actually
+    running IKEv2, as opposed to just having UDP/500 open. This mirrors
+    what ike-scan's default probe does. Returns (initiator_spi, packet).
+    """
+    def xform(ttype, tid, attr=b""):
+        # Transform substructure (RFC 7296 S3.3.2): Last(1)/RESERVED(1)/
+        # Length(2)/Type(1)/RESERVED(1)/ID(2)/[attributes].
+        return struct.pack('>BBHBBH', 0, 0, 8 + len(attr), ttype, 0, tid) + attr
+
+    transforms = [
+        xform(1, 12, struct.pack('>HH', 0x800E, 128)),  # ENCR_AES_CBC, 128-bit key (attr type 14=key length, TV form)
+        xform(2, 5),    # PRF_HMAC_SHA2_256
+        xform(3, 12),   # AUTH_HMAC_SHA2_256_128
+        xform(4, 14),   # DH group 14 (2048-bit MODP)
+    ]
+    # Fix up each transform's "last substructure" byte: 3 = more follow, 0 = this is the last one.
+    transforms = [bytes([0 if i == len(transforms) - 1 else 3]) + t[1:] for i, t in enumerate(transforms)]
+    transforms_blob = b"".join(transforms)
+
+    # Proposal substructure (S3.3.1): Last(1)/RESERVED(1)/Length(2)/Proposal#(1)/
+    # ProtocolID(1,IKE=1)/SPISize(1,0 here)/NumTransforms(1)/[transforms].
+    proposal = struct.pack('>BBHBBBB', 0, 0, 8 + len(transforms_blob), 1, 1, 0, len(transforms)) + transforms_blob
+    sa_payload = struct.pack('>BBH', 34, 0, 4 + len(proposal)) + proposal  # next payload = KE(34)
+
+    dh_group, ke_data = 14, os.urandom(256)  # group 14's public value is 2048 bits = 256 bytes
+    ke_payload = (struct.pack('>BBH', 40, 0, 8 + len(ke_data))  # next payload = Nonce(40)
+                  + struct.pack('>HH', dh_group, 0) + ke_data)
+
+    nonce_data = os.urandom(32)
+    nonce_payload = struct.pack('>BBH', 0, 0, 4 + len(nonce_data)) + nonce_data  # next payload = none
+
+    body = sa_payload + ke_payload + nonce_payload
+    initiator_spi = os.urandom(8)
+    # IKE header (S3.1): InitiatorSPI(8)/ResponderSPI(8)/NextPayload(1,SA=33)/
+    # Version(1,0x20=IKEv2)/ExchangeType(1,34=IKE_SA_INIT)/Flags(1,0x08=Initiator)/
+    # MessageID(4,0)/Length(4).
+    header = struct.pack('>8s8sBBBBII', initiator_spi, b"\x00" * 8, 33, 0x20, 34, 0x08, 0, 28 + len(body))
+    return initiator_spi, header + body
+
+
+def test_ike(ip, port, timeout, **kwargs):
+    """IKE (IPsec VPN key exchange): sends an IKEv2 IKE_SA_INIT request and
+    checks for a valid IKE response.
+
+    A response is accepted as success whether or not our test proposal was
+    actually chosen -- even a NO_PROPOSAL_CHOSEN notify proves a real IKEv2
+    responder is behind the port, which is what "is the IPsec VPN up"
+    really needs to know. This specifically probes IKEv2 (RFC 7296); an
+    IKEv1-only peer won't recognize it and will look identical to a closed
+    port (try -p udp --port 500 to at least confirm the port itself
+    answers or ICMP-unreachables).
+    """
+    initiator_spi, packet = _ike_build_sa_init()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(packet, (ip, port))
+            try:
+                resp, _ = s.recvfrom(4096)
+            except socket.timeout:
+                return False, "no response (UDP timeout) -> IKE not responding (or IKEv1-only)", {}
+    except ConnectionRefusedError:
+        return False, "ICMP port unreachable -> port is closed", {}
+    except OSError as e:
+        return False, f"connection error: {e}", {}
+
+    if len(resp) < 28:
+        return False, f"malformed response ({len(resp)} bytes)", {}
+
+    r_ispi, _r_rspi, next_payload, version, exch_type, flags, _msgid, length = \
+        struct.unpack('>8s8sBBBBII', resp[:28])
+    if r_ispi != initiator_spi:
+        return False, "response initiator SPI mismatch (possible spoofed/stale packet)", {}
+    if (version >> 4) != 2:
+        return False, f"unexpected response (IKE major version {version >> 4}, not IKEv2)", {}
+    if exch_type != 34:
+        return False, f"unexpected response (exchange type {exch_type}, not IKE_SA_INIT)", {}
+
+    payloads, notifies = [], []
+    offset, np = 28, next_payload
+    while np != 0 and offset + 4 <= min(length, len(resp)):
+        plen = struct.unpack('>H', resp[offset + 2:offset + 4])[0]
+        if plen < 4:
+            break
+        name = IKE_PAYLOAD_NAMES.get(np, f"type {np}")
+        payloads.append(name)
+        if np == 41 and plen >= 8:  # Notify payload: ProtocolID(1)/SPISize(1)/MessageType(2)/...
+            notify_type = struct.unpack('>H', resp[offset + 6:offset + 8])[0]
+            notifies.append(IKE_NOTIFY_NAMES.get(notify_type, f"type {notify_type}"))
+        np = resp[offset]
+        offset += plen
+
+    details = {"payloads": payloads, "notifies": notifies, "response_flag": bool(flags & 0x20)}
+    if "SA" in payloads and "KE" in payloads:
+        msg = "OK, IKEv2 responder answered: proposal accepted (SA/KE/Nonce)"
+    elif notifies:
+        msg = f"OK, IKEv2 responder answered: {', '.join(notifies)}"
+    else:
+        msg = f"OK, IKEv2 responder answered (payloads: {', '.join(payloads) or 'none'})"
+    return True, msg, details
+
+
 def _recv_smtp_reply(sock, timeout):
     """Read one SMTP reply (possibly multi-line) and return it as a list of lines."""
     sock.settimeout(timeout)
@@ -1604,10 +1758,15 @@ def test_imaps(ip, port, timeout, user=None, password=None, **kwargs):
 
 
 PROTOCOLS = {
-    "opc": {
-        "port": 4840,
-        "description": "OPC UA - TCP connect + Hello/Acknowledge handshake",
-        "test": test_opcua,
+    "dns": {
+        "port": 53,
+        "description": "DNS - UDP query for a well-known name, checks for a valid response",
+        "test": test_dns,
+    },
+    "ftp": {
+        "port": 21,
+        "description": "FTP - TCP connect, reads the FTP greeting banner (optional --user/--password login + PASV directory listing)",
+        "test": test_ftp,
     },
     "http": {
         "port": 80,
@@ -1619,40 +1778,10 @@ PROTOCOLS = {
         "description": "HTTPS - TLS handshake + certificate validity/trust check (add --check-chain to validate the full chain, optional --user/--password Basic auth check on a 401)",
         "test": test_https,
     },
-    "ssh": {
-        "port": 22,
-        "description": "SSH - TCP connect, reads the SSH version banner",
-        "test": test_ssh,
-    },
-    "ftp": {
-        "port": 21,
-        "description": "FTP - TCP connect, reads the FTP greeting banner (optional --user/--password login + PASV directory listing)",
-        "test": test_ftp,
-    },
-    "sftp": {
-        "port": 22,
-        "description": "SFTP - TCP connect, reads the SSH version banner (optional --user/--password login + directory listing; requires paramiko)",
-        "test": test_sftp,
-    },
-    "smtp": {
-        "port": 25,
-        "description": "SMTP (25/587) - EHLO conversation, auto-upgrades via STARTTLS if offered, optional --user/--password AUTH test",
-        "test": test_smtp,
-    },
-    "smtps": {
-        "port": 465,
-        "description": "SMTPS (465) - implicit TLS from the start, same EHLO/AUTH conversation as smtp",
-        "test": test_smtps,
-    },
-    "pop3": {
-        "port": 110,
-        "description": "POP3 (110) - greeting+CAPA, auto-upgrades via STLS if offered, optional --user/--password login test",
-        "test": test_pop3,
-    },
-    "pop3s": {
-        "port": 995,
-        "description": "POP3S (995) - implicit TLS from the start, same POP3 conversation",
-        "test": test_pop3s,
+    "ike": {
+        "port": 500,
+        "description": "IKE - UDP, sends an IKEv2 IKE_SA_INIT request and checks for a valid response (any IKEv2 answer, even a rejected proposal, counts -- use this to check an IPsec VPN's key exchange is alive; IKEv1-only peers won't answer it)",
+        "test": test_ike,
     },
     "imap": {
         "port": 143,
@@ -1664,35 +1793,70 @@ PROTOCOLS = {
         "description": "IMAPS (993) - implicit TLS from the start, same IMAP conversation",
         "test": test_imaps,
     },
-    "rdp": {
-        "port": 3389,
-        "description": "RDP - X.224/TPKT connection request, checks for Connection Confirm",
-        "test": test_rdp,
-    },
-    "smb": {
-        "port": 445,
-        "description": "SMB - SMB2 Negotiate Protocol request, reports negotiated dialect",
-        "test": test_smb,
-    },
     "modbus": {
         "port": 502,
         "description": "Modbus TCP - Read Holding Registers request (PLC/industrial protocol)",
         "test": test_modbus,
-    },
-    "dns": {
-        "port": 53,
-        "description": "DNS - UDP query for a well-known name, checks for a valid response",
-        "test": test_dns,
     },
     "ntp": {
         "port": 123,
         "description": "NTP - UDP time query, reports stratum and server time",
         "test": test_ntp,
     },
+    "opc": {
+        "port": 4840,
+        "description": "OPC UA - TCP connect + Hello/Acknowledge handshake",
+        "test": test_opcua,
+    },
+    "pop3": {
+        "port": 110,
+        "description": "POP3 (110) - greeting+CAPA, auto-upgrades via STLS if offered, optional --user/--password login test",
+        "test": test_pop3,
+    },
+    "pop3s": {
+        "port": 995,
+        "description": "POP3S (995) - implicit TLS from the start, same POP3 conversation",
+        "test": test_pop3s,
+    },
+    "rdp": {
+        "port": 3389,
+        "description": "RDP - X.224/TPKT connection request, checks for Connection Confirm",
+        "test": test_rdp,
+    },
+    "sftp": {
+        "port": 22,
+        "description": "SFTP - TCP connect, reads the SSH version banner (optional --user/--password login + directory listing; requires paramiko)",
+        "test": test_sftp,
+    },
+    "smb": {
+        "port": 445,
+        "description": "SMB - SMB2 Negotiate Protocol request, reports negotiated dialect",
+        "test": test_smb,
+    },
+    "smtp": {
+        "port": 25,
+        "description": "SMTP (25/587) - EHLO conversation, auto-upgrades via STARTTLS if offered, optional --user/--password AUTH test",
+        "test": test_smtp,
+    },
+    "smtps": {
+        "port": 465,
+        "description": "SMTPS (465) - implicit TLS from the start, same EHLO/AUTH conversation as smtp",
+        "test": test_smtps,
+    },
+    "ssh": {
+        "port": 22,
+        "description": "SSH - TCP connect, reads the SSH version banner",
+        "test": test_ssh,
+    },
     "tcp": {
         "port": None,
         "description": "Generic TCP - just checks whether the port opens (requires --port)",
         "test": test_tcp,
+    },
+    "udp": {
+        "port": None,
+        "description": "Generic UDP - sends an empty datagram, reports a reply or ICMP unreachable (requires --port; a timeout is inconclusive since UDP is connectionless)",
+        "test": test_udp,
     },
 }
 
@@ -1854,6 +2018,12 @@ def print_details(protocol, details):
             print(f"    stratum       : {details['stratum']}")
         if details.get("server_time_utc"):
             print(f"    server time   : {details['server_time_utc']}")
+
+    if protocol == "ike":
+        if details.get("payloads"):
+            print(f"    payloads      : {', '.join(details['payloads'])}")
+        if details.get("notifies"):
+            print(f"    notify        : {', '.join(details['notifies'])}")
 
     if protocol in ("smtp", "smtps"):
         if details.get("tls"):
