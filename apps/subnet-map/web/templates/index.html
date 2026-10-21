@@ -74,9 +74,13 @@
      values (binary netmask, address ranges, notes) never misalign, unlike
      a label-left/value-right row would once the value wraps to 2 lines. */
   #seg-tip {
-    display: none; position: fixed; z-index: 60; pointer-events: none;
+    /* z-index above 9999: when mounted inside the toolbox shell
+       (webui/html_rewrite.py), a sticky "<- PyFNetwork Toolbox" banner
+       sits at z-index:9999 across the top of the page -- this must draw
+       above it, not be drawn over by it. */
+    display: none; position: fixed; z-index: 10000; pointer-events: none;
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: .7rem .85rem; font-size: .85rem; width: 340px;
+    padding: .7rem .85rem; font-size: .85rem; width: 340px; max-width: calc(100vw - 16px);
     box-shadow: 0 6px 20px rgba(0,0,0,.45);
   }
   .seg-tip-title { font-weight: 700; font-size: .95rem; margin-bottom: .5rem; }
@@ -431,9 +435,24 @@ function positionSegTip(event) {
   // off-screen on a narrow/short viewport (e.g. hovering near the left
   // edge on a 390px-wide screen).
   left = Math.max(8, Math.min(left, vw - tw - 8));
-  top = Math.max(8, Math.min(top, vh - th - 8));
+  top = Math.max(topClampMin(), Math.min(top, vh - th - 8));
   tip.style.left = left + 'px';
   tip.style.top = top + 'px';
+}
+function topClampMin() {
+  // The mounted-toolbox shell injects a sticky "<- PyFNetwork Toolbox"
+  // banner across the top of <body> (webui/html_rewrite.py) -- don't let
+  // the tooltip's top edge land underneath it. z-index already draws the
+  // tooltip above the banner regardless, but starting the clamp at the
+  // banner's actual bottom edge (queried live, not a guessed pixel
+  // value) keeps it from visually overlapping the banner's own text.
+  // Falls back to a small margin when running standalone (no banner).
+  const banner = document.querySelector('body > div[style*="position:sticky"]');
+  if (banner) {
+    const bottom = banner.getBoundingClientRect().bottom;
+    if (bottom > 0) return bottom + 6;
+  }
+  return 8;
 }
 function hideSegTip() {
   const tip = document.getElementById('seg-tip');
