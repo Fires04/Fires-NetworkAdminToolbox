@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subnet Map</title>
+<style>
+  :root {
+    --bg: #16181c; --panel: #1f2328; --border: #343a40; --text: #e9ecef;
+    --muted: #8d97a1; --accent: #4dabf7; --ok: #51cf66; --warn: #ffa94d; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .subtitle { color: var(--muted); margin: 0 0 1.25rem; font-size: .92rem; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem 1.3rem; margin: 0 0 1.1rem;
+  }
+  label { display: block; font-size: .78rem; color: var(--muted); margin: 0 0 .3rem; text-transform: uppercase; letter-spacing: .4px; }
+  select, input[type=text], input[type=number], textarea {
+    width: 100%; background: #14171a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: .5rem .6rem; font-size: .88rem; outline: none; font-family: inherit;
+  }
+  input[type=color] { width: 100%; height: 36px; background: #14171a; border: 1px solid var(--border); border-radius: 6px; padding: 2px; cursor: pointer; }
+  select:focus, input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: .8rem; resize: vertical; min-height: 140px; }
+  button {
+    background: var(--accent); color: #06202f; border: none; border-radius: 6px;
+    padding: .5rem 1rem; font-size: .85rem; font-weight: 600; cursor: pointer; transition: .15s;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.secondary { background: #2a2f36; color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: #3a2020; color: var(--bad); border: 1px solid #5a2a2a; }
+  button.icon { padding: .3rem .5rem; font-size: .76rem; line-height: 1; }
+  .row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: flex-end; }
+  .row > * { flex: 1; min-width: 140px; }
+  .row > .shrink { flex: 0 0 auto; min-width: 0; }
+
+  /* new-network form */
+  #add-network-form .row { align-items: flex-end; }
+
+  /* network card header */
+  .net-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: .6rem; }
+  .net-title { font-size: 1.05rem; font-weight: 700; }
+  .net-cidr { color: var(--muted); font-family: ui-monospace, monospace; font-size: .85rem; }
+  .net-actions { display: flex; gap: .4rem; flex: 0 0 auto; }
+  .breadcrumb { font-size: .8rem; color: var(--muted); margin: -.2rem 0 .7rem; }
+  .breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+  .breadcrumb .sep { margin: 0 .3rem; opacity: .5; }
+
+  /* address bar */
+  .bar { display: flex; width: 100%; height: 46px; border-radius: 7px; overflow: hidden; border: 1px solid var(--border); background: #0f1114; }
+  .seg { position: relative; min-width: 3px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-right: 1px solid rgba(0,0,0,.35); cursor: pointer; transition: filter .1s; }
+  .seg:last-child { border-right: none; }
+  .seg:hover { filter: brightness(1.15); }
+  .seg-gap { background: repeating-linear-gradient(135deg, #22262c, #22262c 6px, #262b32 6px, #262b32 12px); color: var(--muted); font-size: 1rem; font-weight: 700; }
+  .seg-child { color: #0b1a12; font-weight: 700; font-size: .78rem; padding: 0 .3rem; white-space: nowrap; }
+  .seg-label { overflow: hidden; text-overflow: ellipsis; }
+
+  .bar-summary { display: flex; justify-content: space-between; color: var(--muted); font-size: .76rem; margin: .4rem 0 .8rem; }
+
+  /* legend list */
+  .legend { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .8rem; }
+  .legend-row { display: flex; align-items: center; gap: .6rem; padding: .4rem .55rem; background: #14171a; border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
+  .legend-name { font-weight: 600; flex: 0 1 auto; }
+  .legend-cidr { color: var(--muted); font-family: ui-monospace, monospace; font-size: .78rem; }
+  .legend-note { color: var(--muted); font-size: .78rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend-spacer { flex: 1; }
+  .legend-actions { display: flex; gap: .3rem; flex: 0 0 auto; }
+  .empty-hint { color: var(--muted); font-size: .82rem; font-style: italic; }
+
+  /* modal */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 1rem; }
+  .overlay.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1.3rem 1.4rem; width: 100%; max-width: 440px; }
+  .modal h3 { margin: 0 0 .9rem; font-size: 1.05rem; }
+  .modal .hint { color: var(--muted); font-size: .78rem; margin: -.4rem 0 .9rem; }
+  .modal .field { margin-bottom: .8rem; }
+  .modal .actions { display: flex; justify-content: space-between; gap: .6rem; margin-top: 1.1rem; }
+  .modal .actions .right { display: flex; gap: .5rem; }
+  .err-box { background: #3a2020; border: 1px solid #5a2a2a; color: var(--bad); border-radius: 6px; padding: .5rem .7rem; font-size: .8rem; margin-bottom: .8rem; display: none; white-space: pre-wrap; }
+  .err-box.show { display: block; }
+
+  /* toolbar + collapsibles */
+  .toolbar { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+  details.card { padding: 0; }
+  details.card > summary { cursor: pointer; padding: .9rem 1.3rem; font-weight: 600; list-style: none; display: flex; align-items: center; gap: .5rem; }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  details.card[open] > summary::before { transform: rotate(90deg); }
+  details.card > .details-body { padding: 0 1.3rem 1.2rem; }
+  .copy-row { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
+  pre.prompt { white-space: pre-wrap; background: #14171a; border: 1px solid var(--border); border-radius: 6px; padding: .8rem; font-size: .78rem; color: var(--text); font-family: ui-monospace, monospace; margin: 0; max-height: 360px; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Subnet Map</h1>
+  <p class="subtitle">Visualize a network's address space as allocated blocks and free gaps. Click a free segment to drop in a new subnet of any size; click an allocated block to drill into it and keep subdividing. Data is saved in this browser only.</p>
+
+  <div class="card" id="add-network-form">
+    <label>Add a network</label>
+    <div class="row">
+      <div><input type="text" id="new-net-name" placeholder="Name, e.g. Office HQ"></div>
+      <div><input type="text" id="new-net-cidr" placeholder="CIDR, e.g. 10.20.0.0/16"></div>
+      <div class="shrink"><button onclick="addNetwork()">+ Add network</button></div>
+    </div>
+  </div>
+
+  <div id="networks"></div>
+
+  <div class="toolbar">
+    <button class="secondary" onclick="openExport()">Export JSON</button>
+    <button class="secondary" onclick="openImport()">Import JSON</button>
+    <button class="danger" onclick="clearAll()">Clear all data</button>
+  </div>
+
+  <details class="card" id="help-card">
+    <summary>Help &amp; AI import prompt</summary>
+    <div class="details-body">
+      <p style="color:var(--muted); font-size:.85rem">
+        Everything here lives only in this browser's <code>localStorage</code> -- clearing site data or
+        switching browsers/devices loses it. Use <b>Export JSON</b> to back it up or move it elsewhere,
+        and <b>Import JSON</b> to load it back (or to load a layout you described to an AI -- paste the
+        prompt below into any AI chat along with a description of your existing subnets, then paste its
+        JSON output into the Import panel).
+      </p>
+      <label style="margin-top:.6rem">Copy this prompt to an AI to generate the JSON</label>
+      <pre class="prompt" id="ai-prompt"></pre>
+      <div class="copy-row"><button class="secondary" onclick="copyText(document.getElementById('ai-prompt').textContent, this)">Copy prompt</button></div>
+    </div>
+  </details>
+
+  <details class="card" id="export-card">
+    <summary>Export JSON</summary>
+    <div class="details-body">
+      <textarea id="export-output" readonly></textarea>
+      <div class="copy-row">
+        <button class="secondary" onclick="copyText(document.getElementById('export-output').value, this)">Copy</button>
+        <button class="secondary" onclick="downloadExport()">Download .json</button>
+      </div>
+    </div>
+  </details>
+
+  <details class="card" id="import-card">
+    <summary>Import JSON</summary>
+    <div class="details-body">
+      <div class="err-box" id="import-err"></div>
+      <label>Paste JSON, or choose a file</label>
+      <input type="file" id="import-file" accept=".json,application/json" onchange="handleImportFile(this)" style="margin-bottom:.6rem">
+      <textarea id="import-input" placeholder='{"version":1,"networks":[...]}'></textarea>
+      <div class="copy-row"><button onclick="doImport()">Import (replaces current data)</button></div>
+    </div>
+  </details>
+</div>
+
+<div class="overlay" id="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title">Add subnet</h3>
+    <div class="hint" id="modal-hint"></div>
+    <div class="err-box" id="modal-err"></div>
+    <form id="modal-form" onsubmit="submitModal(event)">
+      <div class="field"><label>Name</label><input type="text" id="sm-name"></div>
+      <div class="row">
+        <div class="field" id="sm-address-field"><label>Network address (optional)</label><input type="text" id="sm-address" placeholder="auto-place if blank"></div>
+        <div class="field shrink" style="max-width:110px"><label>Prefix</label><input type="number" id="sm-prefix" min="0" max="32" placeholder="24"></div>
+      </div>
+      <div class="field"><label>Note (optional)</label><input type="text" id="sm-note"></div>
+      <div class="field"><label>Color</label><input type="color" id="sm-color"></div>
+      <div class="actions">
+        <div><button type="button" class="danger" id="sm-delete" style="display:none" onclick="deleteFromModal()">Delete</button></div>
+        <div class="right">
+          <button type="button" class="secondary" onclick="closeModal()">Cancel</button>
+          <button type="submit">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'subnetmap.v1';
+const PALETTE = ['#4dabf7','#51cf66','#ffa94d','#da77f2','#ff6b6b','#69db7c','#fab005','#845ef7','#22b8cf','#f06595'];
+
+/* ---------------------------------------------------------------- CIDR math */
+function ipToInt(ip) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec((ip || '').trim());
+  if (!m) return null;
+  const o = [m[1], m[2], m[3], m[4]].map(Number);
+  if (o.some(x => x > 255 || x < 0)) return null;
+  return ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0;
+}
+function intToIp(n) {
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+}
+function parseCidr(str) {
+  const m = /^\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s*\/\s*(\d{1,2})\s*$/.exec(str || '');
+  if (!m) return null;
+  const ip = ipToInt(m[1]);
+  const prefix = parseInt(m[2], 10);
+  if (ip === null || prefix < 0 || prefix > 32) return null;
+  const size = prefix === 0 ? 4294967296 : Math.pow(2, 32 - prefix);
+  const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+  const start = (ip & mask) >>> 0;
+  return { prefix, size, start, end: start + size - 1 };
+}
+function cidrOf(node) { return parseCidr(node.cidr); }
+function fmtCidr(start, prefix) { return intToIp(start) + '/' + prefix; }
+function hostInfo(prefix, size) {
+  if (prefix === 32) return '1 address';
+  if (prefix === 31) return '2 addresses (RFC3021 point-to-point)';
+  return size + ' addresses (usable: ' + (size - 2) + ')';
+}
+
+/* ---------------------------------------------------------------- state */
+let state = loadState();
+const drillPaths = {}; // networkId -> array of descendant node ids
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { version: 1, networks: [] };
+    const data = JSON.parse(raw);
+    if (!data || !Array.isArray(data.networks)) return { version: 1, networks: [] };
+    return data;
+  } catch (e) { return { version: 1, networks: [] }; }
+}
+function saveState() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+}
+function newId() { return 'n' + Math.random().toString(36).slice(2, 10); }
+function assignIds(node) {
+  if (!node.id) node.id = newId();
+  (node.subnets || []).forEach(assignIds);
+}
+state.networks.forEach(assignIds);
+
+function findNetwork(networkId) { return state.networks.find(n => n.id === networkId) || null; }
+function findNodeById(root, id) {
+  if (root.id === id) return root;
+  for (const c of (root.subnets || [])) {
+    const found = findNodeById(c, id);
+    if (found) return found;
+  }
+  return null;
+}
+function findParentOf(root, id) {
+  for (const c of (root.subnets || [])) {
+    if (c.id === id) return root;
+    const found = findParentOf(c, id);
+    if (found) return found;
+  }
+  return null;
+}
+function findPathIds(root, id, trail) {
+  trail = trail || [];
+  if (root.id === id) return trail;
+  for (const c of (root.subnets || [])) {
+    const r = findPathIds(c, id, trail.concat([c.id]));
+    if (r) return r;
+  }
+  return null;
+}
+function resolveDrillNode(network) {
+  const idPath = drillPaths[network.id] || [];
+  let node = network;
+  const valid = [];
+  for (const id of idPath) {
+    const next = (node.subnets || []).find(s => s.id === id);
+    if (!next) break;
+    node = next;
+    valid.push(id);
+  }
+  if (valid.length !== idPath.length) drillPaths[network.id] = valid;
+  return node;
+}
+
+/* ---------------------------------------------------------------- validation */
+function validatePlacement(parentParsed, childParsed, siblings, excludeId) {
+  if (childParsed.start < parentParsed.start || childParsed.end > parentParsed.end) {
+    return 'Outside the parent range (' + fmtCidr(parentParsed.start, parentParsed.prefix) + ').';
+  }
+  if (childParsed.prefix <= parentParsed.prefix) {
+    return 'Must be a smaller block than the parent (prefix greater than /' + parentParsed.prefix + ').';
+  }
+  for (const sib of siblings) {
+    if (sib.id === excludeId) continue;
+    const sp = cidrOf(sib);
+    if (!sp) continue;
+    if (childParsed.start <= sp.end && sp.start <= childParsed.end) {
+      return 'Overlaps "' + sib.name + '" (' + sib.cidr + ').';
+    }
+  }
+  return null;
+}
+function computeGaps(parentParsed, children) {
+  const parsed = children.map(c => cidrOf(c)).filter(Boolean).sort((a, b) => a.start - b.start);
+  const gaps = [];
+  let cursor = parentParsed.start;
+  for (const p of parsed) {
+    if (p.start > cursor) gaps.push({ start: cursor, end: p.start - 1 });
+    cursor = Math.max(cursor, p.end + 1);
+  }
+  if (cursor <= parentParsed.end) gaps.push({ start: cursor, end: parentParsed.end });
+  return gaps;
+}
+function placeInGap(gap, prefix) {
+  const size = prefix === 0 ? 4294967296 : Math.pow(2, 32 - prefix);
+  const alignedStart = Math.ceil(gap.start / size) * size;
+  const end = alignedStart + size - 1;
+  if (alignedStart < gap.start || end > gap.end) return null;
+  return { start: alignedStart, end, prefix, size };
+}
+function largestPrefixInGap(gap) {
+  for (let prefix = 0; prefix <= 32; prefix++) {
+    if (placeInGap(gap, prefix)) return prefix;
+  }
+  return null;
+}
+function placeInFirstFittingGap(gaps, prefix) {
+  for (const g of gaps) {
+    const placed = placeInGap(g, prefix);
+    if (placed) return placed;
+  }
+  return null;
+}
+
+/* ---------------------------------------------------------------- rendering */
+function render() {
+  const el = document.getElementById('networks');
+  if (!state.networks.length) {
+    el.innerHTML = '<p class="empty-hint">No networks yet -- add one above.</p>';
+  } else {
+    el.innerHTML = state.networks.map(renderNetworkCard).join('');
+  }
+  document.getElementById('export-output').value = JSON.stringify(exportState(), null, 2);
+  saveState();
+}
+
+function renderNetworkCard(network) {
+  const rootParsed = cidrOf(network);
+  if (!rootParsed) return '';
+  const current = resolveDrillNode(network);
+  const currentParsed = cidrOf(current);
+  const idPath = drillPaths[network.id] || [];
+
+  const crumbs = [{ id: network.id, name: network.name }];
+  let node = network;
+  for (const id of idPath) {
+    node = (node.subnets || []).find(s => s.id === id);
+    if (node) crumbs.push({ id: node.id, name: node.name });
+  }
+  const breadcrumb = crumbs.length > 1
+    ? '<div class="breadcrumb">' + crumbs.map((c, i) =>
+        i < crumbs.length - 1
+          ? '<a onclick="drillTo(\'' + network.id + '\',\'' + c.id + '\')">' + esc(c.name) + '</a><span class="sep">/</span>'
+          : '<b>' + esc(c.name) + '</b>'
+      ).join('') + '</div>'
+    : '';
+
+  const children = current.subnets || [];
+  const gaps = computeGaps(currentParsed, children);
+  const freeAddrs = gaps.reduce((a, g) => a + (g.end - g.start + 1), 0);
+  const freePct = Math.round((freeAddrs / currentParsed.size) * 1000) / 10;
+
+  const segments = [];
+  children.forEach(c => { const p = cidrOf(c); if (p) segments.push({ type: 'child', node: c, p }); });
+  gaps.forEach(g => segments.push({ type: 'gap', p: g }));
+  segments.sort((a, b) => a.p.start - b.p.start);
+
+  const barHtml = segments.map(seg => {
+    const size = seg.type === 'child' ? seg.p.size : (seg.p.end - seg.p.start + 1);
+    const grow = Math.max(size, 1);
+    if (seg.type === 'gap') {
+      const addrs = seg.p.end - seg.p.start + 1;
+      const title = 'Free: ' + fmtCidr(seg.p.start, 0).split('/')[0] + ' - ' + intToIp(seg.p.end) + ' (' + addrs + ' addresses)';
+      return '<div class="seg seg-gap" style="flex-grow:' + grow + '" title="' + esc(title) + '" onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\')">+</div>';
+    }
+    const c = seg.node;
+    const color = c.color || PALETTE[0];
+    const label = esc(c.name) + ' (' + c.cidr + ')';
+    return '<div class="seg seg-child" style="flex-grow:' + grow + ';background:' + esc(color) + '" title="' + esc(label) + '" onclick="drillTo(\'' + network.id + '\',\'' + c.id + '\')">' +
+      '<span class="seg-label">' + esc(c.name) + '</span></div>';
+  }).join('');
+
+  const legendHtml = children.length
+    ? '<div class="legend">' + children.map(c => {
+        const p = cidrOf(c);
+        return '<div class="legend-row">' +
+          '<div class="legend-swatch" style="background:' + esc(c.color || PALETTE[0]) + '"></div>' +
+          '<div class="legend-name">' + esc(c.name) + '</div>' +
+          '<div class="legend-cidr">' + esc(c.cidr) + (p ? ' · ' + hostInfo(p.prefix, p.size) : '') + '</div>' +
+          '<div class="legend-note">' + esc(c.note || '') + '</div>' +
+          '<div class="legend-spacer"></div>' +
+          '<div class="legend-actions">' +
+            '<button class="icon secondary" onclick="drillTo(\'' + network.id + '\',\'' + c.id + '\')" title="Open">Open</button>' +
+            '<button class="icon secondary" onclick="openEditModal(\'' + network.id + '\',\'' + c.id + '\')" title="Edit">Edit</button>' +
+          '</div>' +
+        '</div>';
+      }).join('') + '</div>'
+    : '<p class="empty-hint">No subnets allocated here yet -- click the bar or "Add subnet" to add one.</p>';
+
+  const canDeleteNetwork = crumbs.length === 1;
+
+  return '<div class="card">' +
+    '<div class="net-head">' +
+      '<div><div class="net-title">' + esc(network.name) + '</div><div class="net-cidr">' + esc(current.cidr) + '</div></div>' +
+      '<div class="net-actions">' +
+        '<button class="icon secondary" onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\')">+ Add subnet</button>' +
+        (crumbs.length > 1
+          ? '<button class="icon secondary" onclick="openEditModal(\'' + network.id + '\',\'' + current.id + '\')">Edit</button>'
+          : '<button class="icon secondary" onclick="openEditModal(\'' + network.id + '\',\'' + network.id + '\')">Rename</button>') +
+        (canDeleteNetwork ? '<button class="icon danger" onclick="deleteNetwork(\'' + network.id + '\')">Delete</button>' : '') +
+      '</div>' +
+    '</div>' +
+    breadcrumb +
+    '<div class="bar">' + barHtml + '</div>' +
+    '<div class="bar-summary"><span>' + children.length + ' subnet(s) allocated</span><span>' + freeAddrs + ' addresses free (' + freePct + '%)</span></div>' +
+    legendHtml +
+  '</div>';
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ---------------------------------------------------------------- network-level actions */
+function addNetwork() {
+  const nameEl = document.getElementById('new-net-name');
+  const cidrEl = document.getElementById('new-net-cidr');
+  const name = nameEl.value.trim() || cidrEl.value.trim();
+  const parsed = parseCidr(cidrEl.value);
+  if (!parsed) { alert('Enter a valid CIDR, e.g. 10.20.0.0/16'); return; }
+  const net = { id: newId(), name: name, cidr: fmtCidr(parsed.start, parsed.prefix), subnets: [] };
+  state.networks.push(net);
+  nameEl.value = ''; cidrEl.value = '';
+  render();
+}
+function deleteNetwork(networkId) {
+  const net = findNetwork(networkId);
+  if (!net) return;
+  const count = countNodes(net) - 1;
+  const msg = count > 0
+    ? 'Delete "' + net.name + '" and its ' + count + ' sub-allocation(s)? This cannot be undone.'
+    : 'Delete "' + net.name + '"?';
+  if (!confirm(msg)) return;
+  state.networks = state.networks.filter(n => n.id !== networkId);
+  delete drillPaths[networkId];
+  render();
+}
+function countNodes(node) {
+  return 1 + (node.subnets || []).reduce((a, c) => a + countNodes(c), 0);
+}
+function drillTo(networkId, nodeId) {
+  const network = findNetwork(networkId);
+  if (!network) return;
+  if (nodeId === networkId) { drillPaths[networkId] = []; render(); return; }
+  const path = findPathIds(network, nodeId, []);
+  if (path) drillPaths[networkId] = path;
+  render();
+}
+
+/* ---------------------------------------------------------------- add/edit modal */
+let modalCtx = null;
+
+function openAddModal(networkId, parentNodeId) {
+  const network = findNetwork(networkId);
+  const parent = findNodeById(network, parentNodeId);
+  if (!parent) return;
+  modalCtx = { mode: 'add', networkId, parentNodeId };
+  document.getElementById('modal-title').textContent = 'Add subnet into ' + parent.cidr;
+  document.getElementById('modal-hint').textContent = 'Give a prefix length and, optionally, an exact network address. Leave the address blank to auto-place in the first free gap that fits.';
+  document.getElementById('sm-name').value = '';
+  document.getElementById('sm-address').value = '';
+  document.getElementById('sm-prefix').value = '';
+  document.getElementById('sm-note').value = '';
+  const siblingCount = (parent.subnets || []).length;
+  document.getElementById('sm-color').value = PALETTE[siblingCount % PALETTE.length];
+  document.getElementById('sm-address-field').style.display = '';
+  document.getElementById('sm-delete').style.display = 'none';
+  document.getElementById('modal-err').classList.remove('show');
+  document.getElementById('modal-overlay').classList.add('open');
+  document.getElementById('sm-prefix').focus();
+}
+
+function openEditModal(networkId, nodeId) {
+  const network = findNetwork(networkId);
+  const node = findNodeById(network, nodeId);
+  if (!node) return;
+  const isRoot = nodeId === networkId;
+  modalCtx = { mode: 'edit', networkId, nodeId };
+  document.getElementById('modal-title').textContent = isRoot ? 'Edit network' : 'Edit subnet';
+  document.getElementById('modal-hint').textContent = isRoot ? '' : 'Change the CIDR to move/resize this block (must still fit inside its parent and not overlap siblings).';
+  document.getElementById('sm-name').value = node.name || '';
+  document.getElementById('sm-note').value = node.note || '';
+  document.getElementById('sm-color').value = node.color || PALETTE[0];
+  if (isRoot) {
+    document.getElementById('sm-address-field').style.display = '';
+    document.getElementById('sm-address-field').querySelector('label').textContent = 'CIDR';
+    document.getElementById('sm-address').value = node.cidr;
+    document.getElementById('sm-address').placeholder = '';
+    document.getElementById('sm-prefix').closest('.field').style.display = 'none';
+  } else {
+    const p = cidrOf(node);
+    document.getElementById('sm-address-field').querySelector('label').textContent = 'Network address';
+    document.getElementById('sm-address').value = intToIp(p.start);
+    document.getElementById('sm-address').placeholder = '';
+    document.getElementById('sm-prefix').closest('.field').style.display = '';
+    document.getElementById('sm-prefix').value = p.prefix;
+  }
+  document.getElementById('sm-delete').style.display = '';
+  document.getElementById('modal-err').classList.remove('show');
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  modalCtx = null;
+  // restore default layout in case edit-mode hid fields
+  document.getElementById('sm-address-field').querySelector('label').textContent = 'Network address (optional)';
+  document.getElementById('sm-address').placeholder = 'auto-place if blank';
+  document.getElementById('sm-prefix').closest('.field').style.display = '';
+}
+
+function showModalErr(msg) {
+  const box = document.getElementById('modal-err');
+  box.textContent = msg;
+  box.classList.add('show');
+}
+
+function submitModal(e) {
+  e.preventDefault();
+  if (!modalCtx) return;
+  const name = document.getElementById('sm-name').value.trim();
+  const note = document.getElementById('sm-note').value.trim();
+  const color = document.getElementById('sm-color').value;
+  const addressRaw = document.getElementById('sm-address').value.trim();
+
+  const network = findNetwork(modalCtx.networkId);
+  if (!network) return;
+
+  if (modalCtx.mode === 'edit' && modalCtx.nodeId === modalCtx.networkId) {
+    // editing a root network: address field holds the full CIDR
+    const parsed = parseCidr(addressRaw);
+    if (!parsed) { showModalErr('Enter a valid CIDR, e.g. 10.20.0.0/16'); return; }
+    network.name = name || addressRaw;
+    network.cidr = fmtCidr(parsed.start, parsed.prefix);
+    network.note = note || undefined;
+    network.color = color;
+    closeModal(); render(); return;
+  }
+
+  const parentId = modalCtx.mode === 'add' ? modalCtx.parentNodeId : findParentOf(network, modalCtx.nodeId).id;
+  const parent = findNodeById(network, parentId);
+  const parentParsed = cidrOf(parent);
+  const siblings = parent.subnets || [];
+
+  let childParsed;
+  if (addressRaw) {
+    const prefixRaw = document.getElementById('sm-prefix').value;
+    const prefix = parseInt(prefixRaw, 10);
+    const base = ipToInt(addressRaw);
+    if (base === null || isNaN(prefix)) { showModalErr('Enter a valid network address and prefix.'); return; }
+    const candidate = parseCidr(addressRaw + '/' + prefix);
+    if (!candidate) { showModalErr('Invalid CIDR.'); return; }
+    if (candidate.start !== base) { showModalErr('That address is not the network address for /' + prefix + ' -- did you mean ' + intToIp(candidate.start) + '?'); return; }
+    childParsed = candidate;
+  } else {
+    const prefix = parseInt(document.getElementById('sm-prefix').value, 10);
+    if (isNaN(prefix) || prefix < 0 || prefix > 32) { showModalErr('Enter a prefix length (0-32).'); return; }
+    const gaps = computeGaps(parentParsed, modalCtx.mode === 'edit' ? siblings.filter(s => s.id !== modalCtx.nodeId) : siblings);
+    const placed = placeInFirstFittingGap(gaps, prefix);
+    if (!placed) { showModalErr('No free, aligned gap big enough for a /' + prefix + ' here.'); return; }
+    childParsed = placed;
+  }
+
+  const excludeId = modalCtx.mode === 'edit' ? modalCtx.nodeId : null;
+  const err = validatePlacement(parentParsed, childParsed, siblings, excludeId);
+  if (err) { showModalErr(err); return; }
+
+  if (modalCtx.mode === 'add') {
+    const node = { id: newId(), name: name || fmtCidr(childParsed.start, childParsed.prefix), cidr: fmtCidr(childParsed.start, childParsed.prefix), subnets: [] };
+    if (note) node.note = note;
+    if (color) node.color = color;
+    parent.subnets = parent.subnets || [];
+    parent.subnets.push(node);
+  } else {
+    const node = findNodeById(network, modalCtx.nodeId);
+    node.name = name || fmtCidr(childParsed.start, childParsed.prefix);
+    node.cidr = fmtCidr(childParsed.start, childParsed.prefix);
+    node.note = note || undefined;
+    node.color = color;
+  }
+  closeModal();
+  render();
+}
+
+function deleteFromModal() {
+  if (!modalCtx || modalCtx.mode !== 'edit') return;
+  const network = findNetwork(modalCtx.networkId);
+  if (modalCtx.nodeId === modalCtx.networkId) { closeModal(); deleteNetwork(modalCtx.networkId); return; }
+  const node = findNodeById(network, modalCtx.nodeId);
+  const parent = findParentOf(network, modalCtx.nodeId);
+  const count = countNodes(node) - 1;
+  const msg = count > 0
+    ? 'Delete "' + node.name + '" and its ' + count + ' sub-allocation(s)?'
+    : 'Delete "' + node.name + '"?';
+  if (!confirm(msg)) return;
+  parent.subnets = (parent.subnets || []).filter(c => c.id !== node.id);
+  // if we were drilled into the deleted node (or a descendant), back out
+  const path = drillPaths[network.id] || [];
+  const idx = path.indexOf(node.id);
+  if (idx !== -1) drillPaths[network.id] = path.slice(0, idx);
+  closeModal();
+  render();
+}
+
+/* ---------------------------------------------------------------- export / import */
+function cleanExportNode(node) {
+  const out = { name: node.name, cidr: node.cidr };
+  if (node.note) out.note = node.note;
+  if (node.color) out.color = node.color;
+  if (node.subnets && node.subnets.length) out.subnets = node.subnets.map(cleanExportNode);
+  return out;
+}
+function exportState() {
+  return { version: 1, networks: state.networks.map(cleanExportNode) };
+}
+function openExport() {
+  document.getElementById('export-output').value = JSON.stringify(exportState(), null, 2);
+  document.getElementById('export-card').open = true;
+  document.getElementById('export-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function downloadExport() {
+  const blob = new Blob([document.getElementById('export-output').value], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'subnet-map.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+function openImport() {
+  document.getElementById('import-card').open = true;
+  document.getElementById('import-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function handleImportFile(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { document.getElementById('import-input').value = reader.result; };
+  reader.readAsText(file);
+}
+function validateImportNode(node, parent, siblingsSoFar, pathLabel, errors) {
+  if (!node || typeof node !== 'object') { errors.push(pathLabel + ': not an object'); return; }
+  if (typeof node.name !== 'string' || !node.name.trim()) errors.push(pathLabel + ': missing "name"');
+  if (typeof node.cidr !== 'string') { errors.push(pathLabel + ': missing "cidr"'); return; }
+  const p = parseCidr(node.cidr);
+  if (!p) { errors.push(pathLabel + ': invalid CIDR "' + node.cidr + '"'); return; }
+  if (parent) {
+    const pp = cidrOf(parent);
+    if (p.start < pp.start || p.end > pp.end) errors.push(pathLabel + ': outside parent ' + parent.cidr);
+    if (p.prefix <= pp.prefix) errors.push(pathLabel + ': prefix must be longer (smaller block) than parent /' + pp.prefix);
+    for (const sib of siblingsSoFar) {
+      const sp = parseCidr(sib.cidr);
+      if (sp && p.start <= sp.end && sp.start <= p.end) errors.push(pathLabel + ': overlaps "' + sib.name + '" (' + sib.cidr + ')');
+    }
+  }
+  if (node.subnets !== undefined && !Array.isArray(node.subnets)) { errors.push(pathLabel + '.subnets: must be an array'); return; }
+  const kids = node.subnets || [];
+  const seen = [];
+  kids.forEach((k, i) => { validateImportNode(k, node, seen, pathLabel + '.subnets[' + i + ']', errors); seen.push(k); });
+}
+function doImport() {
+  const raw = document.getElementById('import-input').value;
+  const errBox = document.getElementById('import-err');
+  errBox.classList.remove('show');
+  let data;
+  try { data = JSON.parse(raw); } catch (e) { errBox.textContent = 'Invalid JSON: ' + e.message; errBox.classList.add('show'); return; }
+  if (!data || !Array.isArray(data.networks)) { errBox.textContent = 'Expected a top-level "networks" array.'; errBox.classList.add('show'); return; }
+  const errors = [];
+  data.networks.forEach((n, i) => validateImportNode(n, null, [], 'networks[' + i + ']', errors));
+  if (errors.length) { errBox.textContent = errors.join('\n'); errBox.classList.add('show'); return; }
+  if (state.networks.length && !confirm('Replace all current data with this import? This cannot be undone.')) return;
+  data.networks.forEach(assignIds);
+  state = { version: 1, networks: data.networks };
+  Object.keys(drillPaths).forEach(k => delete drillPaths[k]);
+  document.getElementById('import-input').value = '';
+  document.getElementById('import-card').open = false;
+  render();
+}
+function clearAll() {
+  if (!confirm('Delete all networks and subnets? This cannot be undone.')) return;
+  state = { version: 1, networks: [] };
+  Object.keys(drillPaths).forEach(k => delete drillPaths[k]);
+  render();
+}
+
+/* ---------------------------------------------------------------- clipboard */
+function copyText(text, btn) {
+  const done = () => { if (btn) { const old = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = old, 1200); } };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { /* ignore */ }
+  document.body.removeChild(ta);
+}
+
+/* ---------------------------------------------------------------- AI prompt text */
+document.getElementById('ai-prompt').textContent =
+'I\'m building a subnet allocation map. Output ONLY a single JSON object (no prose, no markdown fences) matching this schema, describing the subnet layout I describe below (or that you see in the attached notes/screenshot).\n' +
+'\n' +
+'Schema:\n' +
+'{\n' +
+'  "version": 1,\n' +
+'  "networks": [\n' +
+'    {\n' +
+'      "name": "string, short label",\n' +
+'      "cidr": "a.b.c.d/nn",\n' +
+'      "note": "string, optional",\n' +
+'      "color": "#rrggbb, optional",\n' +
+'      "subnets": [ /* optional, zero or more nodes with this same shape, nested as deep as needed */ ]\n' +
+'    }\n' +
+'  ]\n' +
+'}\n' +
+'\n' +
+'Rules:\n' +
+'- "networks" is a list of one or more independent top-level address blocks -- they do not need to relate to each other.\n' +
+'- Every node\'s "cidr" must be a valid IPv4 CIDR, e.g. "10.20.4.0/24", and should be the actual network address for its prefix (not a host address).\n' +
+'- Every entry in a node\'s "subnets" array must be fully contained inside that node\'s own "cidr" range, and must have a strictly longer prefix (a smaller block) than its parent.\n' +
+'- Subnets that share the same parent must not overlap each other.\n' +
+'- Not every address in a parent has to be covered by a child -- gaps (unallocated space) are expected and fine.\n' +
+'- "subnets" can nest arbitrarily deep if I describe further subdivision of an already-allocated block.\n' +
+'- Omit "note"/"color"/"subnets" entirely when not needed, rather than setting them to null or an empty value.\n' +
+'\n' +
+'Here is my layout:\n' +
+'<describe your subnets here -- sizes, purposes, which ones sit inside which, etc.>';
+
+render();
+</script>
+</body>
+</html>

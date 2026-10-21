@@ -1,0 +1,2 @@
+description: "Visualize a subnet's address space as allocated blocks and free gaps -- click a gap to add a new subnet of any size, drill into any block to keep subdividing it. Data lives in the browser (localStorage); import/export JSON to move it or hand-build it with an AI."
+app: "web.app:app"

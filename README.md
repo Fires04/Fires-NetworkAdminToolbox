@@ -198,6 +198,25 @@ Traffic-log fields only for now; extending the same field-catalog/block
 builder to other log types (Threat, URL Filtering, ...) is a natural
 follow-up, not yet done.
 
+`apps/subnet-map/` ("Subnet Map") visualizes a network's address space as
+a bar of proportionally-sized blocks: allocated child subnets in color,
+unallocated space as a hatched, clickable "free" gap -- the point being to
+answer "where's the room left in this /16" at a glance instead of working
+it out by hand, then drop a new subnet of any size straight into a gap
+(give it just a prefix length and it's auto-placed, correctly aligned, in
+the first gap that fits; or give an exact network address for precise
+placement). Any allocated block can be drilled into to subdivide it
+further, recursively, with a breadcrumb back up. Multiple independent
+root networks are supported side by side. Everything -- CIDR math,
+placement/overlap validation, rendering -- runs client-side; the FastAPI
+app just serves the page. State lives in the browser's own `localStorage`,
+per browser/device (same as panos-filter-builder); Export/Import JSON is
+the escape hatch to back it up, move it to another browser, or hand-build
+a layout with an AI -- the page's own Help panel has a ready-to-copy
+prompt describing the JSON schema and validation rules, so an AI given a
+description of an existing subnet layout can produce JSON this app will
+import directly.
+
 ### Adding an app module
 
 1. Drop the project under `apps/<name>/`, with its own ASGI application
