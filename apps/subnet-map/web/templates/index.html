@@ -88,6 +88,11 @@
   .seg-tip-row:first-of-type { border-top: none; }
   .seg-tip-row span { display: block; color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .4px; margin-bottom: .1rem; }
   .seg-tip-row b { display: block; font-family: ui-monospace, monospace; font-weight: 600; font-size: .86rem; line-height: 1.35; word-break: break-word; }
+  /* Notes are free text and can be arbitrarily long -- clamp so a long
+     one can't grow the tooltip taller than a short viewport (a hover
+     tooltip has no practical way to scroll); other rows are short,
+     known-shape values and don't need this. */
+  .seg-tip-clamp { font-family: inherit; font-weight: 400; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 
   /* modal */
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 1rem; }
@@ -375,8 +380,9 @@ function render() {
 }
 
 /* ---------------------------------------------------------------- per-segment info tooltip */
-function tipRow(label, value) {
-  return '<div class="seg-tip-row"><span>' + esc(label) + '</span><b>' + esc(value) + '</b></div>';
+function tipRow(label, value, clamp) {
+  const cls = clamp ? ' class="seg-tip-clamp"' : '';
+  return '<div class="seg-tip-row"><span>' + esc(label) + '</span><b' + cls + '>' + esc(value) + '</b></div>';
 }
 function childInfoHtml(node) {
   const p = cidrOf(node);
@@ -399,7 +405,7 @@ function childInfoHtml(node) {
     rows.push(tipRow('Host', intToIp(p.start)));
   }
   rows.push(tipRow('IP class', ipClassOf((p.start >>> 24) & 255)));
-  if (node.note) rows.push(tipRow('Note', node.note));
+  if (node.note) rows.push(tipRow('Note', node.note, true));
   return '<div class="seg-tip-title">' + esc(node.name) + '</div>' + rows.join('');
 }
 function gapInfoHtml(start, end) {
