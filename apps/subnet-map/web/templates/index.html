@@ -68,17 +68,19 @@
 
   .bar-summary { display: flex; justify-content: space-between; color: var(--muted); font-size: .72rem; margin: .3rem 0 .4rem; }
 
-  /* legend list -- a compact table, not boxed cards, so many subnets don't blow up the page height */
-  .legend { display: flex; flex-direction: column; font-size: .8rem; }
-  .legend-row { display: flex; align-items: center; gap: .55rem; padding: .22rem .1rem; border-bottom: 1px solid var(--border); }
-  .legend-row:last-child { border-bottom: none; }
-  .legend-swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
-  .legend-name { font-weight: 600; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-  .legend-cidr { color: var(--muted); font-family: ui-monospace, monospace; font-size: .75rem; flex: 0 0 auto; }
-  .legend-note { color: var(--muted); font-size: .75rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .legend-spacer { flex: 1; }
-  .legend-actions { display: flex; gap: .25rem; flex: 0 0 auto; }
   .empty-hint { color: var(--muted); font-size: .8rem; font-style: italic; margin: .2rem 0; }
+
+  /* per-segment hover info tooltip */
+  #seg-tip {
+    display: none; position: fixed; z-index: 60; pointer-events: none;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: .55rem .7rem; font-size: .76rem; min-width: 200px; max-width: 300px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  }
+  .seg-tip-title { font-weight: 700; font-size: .82rem; margin-bottom: .35rem; }
+  .seg-tip-row { display: flex; justify-content: space-between; gap: .8rem; padding: .12rem 0; }
+  .seg-tip-row span { color: var(--muted); }
+  .seg-tip-row b { font-family: ui-monospace, monospace; font-weight: 600; text-align: right; }
 
   /* modal */
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 1rem; }
@@ -165,6 +167,8 @@
   </details>
 </div>
 
+<div id="seg-tip"></div>
+
 <div class="overlay" id="modal-overlay">
   <div class="modal">
     <h3 id="modal-title">Add subnet</h3>
@@ -213,16 +217,21 @@ function parseCidr(str) {
   const size = prefix === 0 ? 4294967296 : Math.pow(2, 32 - prefix);
   const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
   const start = (ip & mask) >>> 0;
-  return { prefix, size, start, end: start + size - 1 };
+  return { prefix, size, start, end: start + size - 1, mask };
 }
 function cidrOf(node) { return parseCidr(node.cidr); }
 function fmtCidr(start, prefix) { return intToIp(start) + '/' + prefix; }
-function hostInfo(prefix, size) {
-  if (prefix === 32) return '1 address';
-  if (prefix === 31) return '2 addresses (RFC3021 point-to-point)';
-  return size + ' addresses (usable: ' + (size - 2) + ')';
+function toBinaryDotted(n) {
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]
+    .map(o => o.toString(2).padStart(8, '0')).join('.');
 }
-
+function ipClassOf(firstOctet) {
+  if (firstOctet < 128) return 'A';
+  if (firstOctet < 192) return 'B';
+  if (firstOctet < 224) return 'C';
+  if (firstOctet < 240) return 'D (multicast)';
+  return 'E (reserved)';
+}
 /* ---------------------------------------------------------------- state */
 let state = loadState();
 const drillPaths = {}; // networkId -> array of descendant node ids
@@ -243,6 +252,12 @@ function saveState() {
 function newId() { return 'n' + Math.random().toString(36).slice(2, 10); }
 function assignIds(node) {
   if (!node.id) node.id = newId();
+  // Normalize to the canonical network address for its prefix (same as
+  // "Add network"/"Add subnet" already do) -- keeps a CIDR entered or
+  // imported with host bits set (e.g. "10.0.0.5/24") from silently
+  // diverging from what the rest of the app treats it as.
+  const p = parseCidr(node.cidr);
+  if (p) node.cidr = fmtCidr(p.start, p.prefix);
   (node.subnets || []).forEach(assignIds);
 }
 state.networks.forEach(assignIds);
@@ -339,6 +354,7 @@ function placeInFirstFittingGap(gaps, prefix) {
 
 /* ---------------------------------------------------------------- rendering */
 function render() {
+  hideSegTip(); // a re-render can detach the segment the tooltip is anchored to without firing mouseleave
   const el = document.getElementById('networks');
   if (!state.networks.length) {
     el.innerHTML = '<p class="empty-hint">No networks yet -- add one above.</p>';
@@ -347,6 +363,69 @@ function render() {
   }
   document.getElementById('export-output').value = JSON.stringify(exportState(), null, 2);
   saveState();
+}
+
+/* ---------------------------------------------------------------- per-segment info tooltip */
+function tipRow(label, value) {
+  return '<div class="seg-tip-row"><span>' + esc(label) + '</span><b>' + esc(value) + '</b></div>';
+}
+function childInfoHtml(node) {
+  const p = cidrOf(node);
+  if (!p) return '';
+  const rows = [
+    tipRow('CIDR', fmtCidr(p.start, p.prefix)),
+    tipRow('Network address', intToIp(p.start)),
+    tipRow('Netmask', intToIp(p.mask) + ' (' + toBinaryDotted(p.mask) + ')'),
+    tipRow('Wildcard mask', intToIp((~p.mask) >>> 0)),
+    tipRow('Network size', p.size + ' addresses'),
+  ];
+  if (p.prefix <= 30) {
+    rows.push(tipRow('Usable range', intToIp(p.start + 1) + ' - ' + intToIp(p.end - 1) + ' (' + (p.size - 2) + ')'));
+    rows.push(tipRow('Broadcast', intToIp(p.end)));
+  } else if (p.prefix === 31) {
+    rows.push(tipRow('Usable (RFC3021)', intToIp(p.start) + ', ' + intToIp(p.end)));
+  } else {
+    rows.push(tipRow('Host', intToIp(p.start)));
+  }
+  rows.push(tipRow('IP class', ipClassOf((p.start >>> 24) & 255)));
+  if (node.note) rows.push(tipRow('Note', node.note));
+  return '<div class="seg-tip-title">' + esc(node.name) + '</div>' + rows.join('');
+}
+function gapInfoHtml(start, end) {
+  const size = end - start + 1;
+  const rows = [
+    tipRow('Range', intToIp(start) + ' - ' + intToIp(end)),
+    tipRow('Size', size + ' addresses'),
+    tipRow('Largest aligned block', '/' + largestPrefixInGap({ start, end })),
+  ];
+  return '<div class="seg-tip-title">Free space</div>' + rows.join('');
+}
+function showSegTip(event, kind, a, b) {
+  const tip = document.getElementById('seg-tip');
+  if (kind === 'child') {
+    const network = findNetwork(a);
+    const node = network && findNodeById(network, b);
+    if (!node) return;
+    tip.innerHTML = childInfoHtml(node);
+  } else {
+    tip.innerHTML = gapInfoHtml(a, b);
+  }
+  tip.style.display = 'block';
+  positionSegTip(event);
+}
+function positionSegTip(event) {
+  const tip = document.getElementById('seg-tip');
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const tw = tip.offsetWidth || 260, th = tip.offsetHeight || 160;
+  let left = event.clientX + 14, top = event.clientY + 14;
+  if (left + tw > vw - 8) left = event.clientX - tw - 14;
+  if (top + th > vh - 8) top = Math.max(8, vh - th - 8);
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+}
+function hideSegTip() {
+  const tip = document.getElementById('seg-tip');
+  if (tip) tip.style.display = 'none';
 }
 
 function renderNetworkCard(network) {
@@ -384,33 +463,21 @@ function renderNetworkCard(network) {
     const size = seg.type === 'child' ? seg.p.size : (seg.p.end - seg.p.start + 1);
     const grow = Math.max(size, 1);
     if (seg.type === 'gap') {
-      const addrs = seg.p.end - seg.p.start + 1;
-      const title = 'Free: ' + fmtCidr(seg.p.start, 0).split('/')[0] + ' - ' + intToIp(seg.p.end) + ' (' + addrs + ' addresses)';
-      return '<div class="seg seg-gap" style="flex-grow:' + grow + '" title="' + esc(title) + '" onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\',' + seg.p.start + ')">+</div>';
+      return '<div class="seg seg-gap" style="flex-grow:' + grow + '"' +
+        ' onmouseenter="showSegTip(event,\'gap\',' + seg.p.start + ',' + seg.p.end + ')" onmouseleave="hideSegTip()"' +
+        ' onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\',' + seg.p.start + ')">+</div>';
     }
     const c = seg.node;
     const color = c.color || PALETTE[0];
-    const label = esc(c.name) + ' (' + c.cidr + ')';
-    return '<div class="seg seg-child" style="flex-grow:' + grow + ';background:' + esc(color) + '" title="' + esc(label) + '" onclick="drillTo(\'' + network.id + '\',\'' + c.id + '\')">' +
+    return '<div class="seg seg-child" style="flex-grow:' + grow + ';background:' + esc(color) + '"' +
+      ' onmouseenter="showSegTip(event,\'child\',\'' + network.id + '\',\'' + c.id + '\')" onmouseleave="hideSegTip()"' +
+      ' onclick="drillTo(\'' + network.id + '\',\'' + c.id + '\')">' +
       '<span class="seg-label">' + esc(c.name) + '</span></div>';
   }).join('');
 
-  const legendHtml = children.length
-    ? '<div class="legend">' + children.map(c => {
-        const p = cidrOf(c);
-        return '<div class="legend-row">' +
-          '<div class="legend-swatch" style="background:' + esc(c.color || PALETTE[0]) + '"></div>' +
-          '<div class="legend-name">' + esc(c.name) + '</div>' +
-          '<div class="legend-cidr">' + esc(c.cidr) + (p ? ' · ' + hostInfo(p.prefix, p.size) : '') + '</div>' +
-          '<div class="legend-note">' + esc(c.note || '') + '</div>' +
-          '<div class="legend-spacer"></div>' +
-          '<div class="legend-actions">' +
-            '<button class="icon secondary" onclick="drillTo(\'' + network.id + '\',\'' + c.id + '\')" title="Open">Open</button>' +
-            '<button class="icon secondary" onclick="openEditModal(\'' + network.id + '\',\'' + c.id + '\')" title="Edit">Edit</button>' +
-          '</div>' +
-        '</div>';
-      }).join('') + '</div>'
-    : '<p class="empty-hint">No subnets allocated here yet -- click the bar or "Add subnet" to add one.</p>';
+  const emptyHint = children.length
+    ? ''
+    : '<p class="empty-hint">No subnets allocated here yet -- click the bar or "Add subnet" to add one. Hover any segment for its details.</p>';
 
   const canDeleteNetwork = crumbs.length === 1;
   const collapsed = !!collapsedNetworks[network.id];
@@ -418,7 +485,9 @@ function renderNetworkCard(network) {
 
   return '<div class="card">' +
     '<div class="net-head">' +
-      '<div class="net-head-left" onclick="toggleNetworkCollapse(\'' + network.id + '\')">' +
+      '<div class="net-head-left" role="button" tabindex="0" aria-expanded="' + (!collapsed) + '"' +
+        ' onclick="toggleNetworkCollapse(\'' + network.id + '\')"' +
+        ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();toggleNetworkCollapse(\'' + network.id + '\');}">' +
         '<span class="collapse-chevron">' + (collapsed ? '▸' : '▾') + '</span>' +
         '<div class="net-title-block"><div class="net-title">' + esc(network.name) + '</div><div class="net-cidr">' + esc(current.cidr) + esc(collapsedSummary) + '</div></div>' +
       '</div>' +
@@ -434,7 +503,7 @@ function renderNetworkCard(network) {
       breadcrumb +
       '<div class="bar">' + barHtml + '</div>' +
       '<div class="bar-summary"><span>' + children.length + ' subnet(s) allocated</span><span>' + freeAddrs + ' addresses free (' + freePct + '%)</span></div>' +
-      legendHtml) +
+      emptyHint) +
   '</div>';
 }
 
