@@ -444,6 +444,14 @@ function positionSegTip(event) {
   top = Math.max(topClampMin(), Math.min(top, vh - th - 8));
   tip.style.left = left + 'px';
   tip.style.top = top + 'px';
+  // Last-resort safety net for a short viewport where even a clamped
+  // tooltip's full row count doesn't fit (e.g. a 320x568 phone): never
+  // let the box extend past the viewport bottom. There's no good way to
+  // scroll a hover-only, pointer-events:none element, so content is
+  // clipped rather than hanging off-screen -- full detail is still one
+  // tap/click away via "Edit" on the drilled-in node.
+  tip.style.maxHeight = Math.max(80, vh - top - 8) + 'px';
+  tip.style.overflow = 'hidden';
 }
 function topClampMin() {
   // The mounted-toolbox shell injects a sticky "<- PyFNetwork Toolbox"
