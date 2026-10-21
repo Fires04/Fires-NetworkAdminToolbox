@@ -11,15 +11,15 @@
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
-    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 1rem 1.25rem; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
-  .subtitle { color: var(--muted); margin: 0 0 1.25rem; font-size: .92rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 .15rem; }
+  .subtitle { color: var(--muted); margin: 0 0 .8rem; font-size: .85rem; }
   .wrap { max-width: 1100px; margin: 0 auto; }
   .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    padding: 1.1rem 1.3rem; margin: 0 0 1.1rem;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+    padding: .7rem .9rem; margin: 0 0 .6rem;
   }
   label { display: block; font-size: .78rem; color: var(--muted); margin: 0 0 .3rem; text-transform: uppercase; letter-spacing: .4px; }
   select, input[type=text], input[type=number], textarea {
@@ -45,36 +45,40 @@
   #add-network-form .row { align-items: flex-end; }
 
   /* network card header */
-  .net-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: .6rem; }
-  .net-title { font-size: 1.05rem; font-weight: 700; }
-  .net-cidr { color: var(--muted); font-family: ui-monospace, monospace; font-size: .85rem; }
-  .net-actions { display: flex; gap: .4rem; flex: 0 0 auto; }
-  .breadcrumb { font-size: .8rem; color: var(--muted); margin: -.2rem 0 .7rem; }
+  .net-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: .35rem; }
+  .net-head-left { display: flex; align-items: center; gap: .5rem; cursor: pointer; min-width: 0; }
+  .collapse-chevron { color: var(--muted); font-size: .75rem; flex: 0 0 auto; transition: transform .15s; width: .8em; text-align: center; }
+  .net-title-block { min-width: 0; }
+  .net-title { font-size: .95rem; font-weight: 700; line-height: 1.3; }
+  .net-cidr { color: var(--muted); font-family: ui-monospace, monospace; font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .net-actions { display: flex; gap: .35rem; flex: 0 0 auto; }
+  .breadcrumb { font-size: .76rem; color: var(--muted); margin: -.1rem 0 .4rem 1.3em; }
   .breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
   .breadcrumb a:hover { text-decoration: underline; }
   .breadcrumb .sep { margin: 0 .3rem; opacity: .5; }
 
   /* address bar */
-  .bar { display: flex; width: 100%; height: 46px; border-radius: 7px; overflow: hidden; border: 1px solid var(--border); background: #0f1114; }
+  .bar { display: flex; width: 100%; height: 36px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); background: #0f1114; }
   .seg { position: relative; min-width: 3px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-right: 1px solid rgba(0,0,0,.35); cursor: pointer; transition: filter .1s; }
   .seg:last-child { border-right: none; }
   .seg:hover { filter: brightness(1.15); }
-  .seg-gap { background: repeating-linear-gradient(135deg, #22262c, #22262c 6px, #262b32 6px, #262b32 12px); color: var(--muted); font-size: 1rem; font-weight: 700; }
-  .seg-child { color: #0b1a12; font-weight: 700; font-size: .78rem; padding: 0 .3rem; white-space: nowrap; }
+  .seg-gap { background: repeating-linear-gradient(135deg, #22262c, #22262c 6px, #262b32 6px, #262b32 12px); color: var(--muted); font-size: .9rem; font-weight: 700; }
+  .seg-child { color: #0b1a12; font-weight: 700; font-size: .74rem; padding: 0 .3rem; white-space: nowrap; }
   .seg-label { overflow: hidden; text-overflow: ellipsis; }
 
-  .bar-summary { display: flex; justify-content: space-between; color: var(--muted); font-size: .76rem; margin: .4rem 0 .8rem; }
+  .bar-summary { display: flex; justify-content: space-between; color: var(--muted); font-size: .72rem; margin: .3rem 0 .4rem; }
 
-  /* legend list */
-  .legend { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .8rem; }
-  .legend-row { display: flex; align-items: center; gap: .6rem; padding: .4rem .55rem; background: #14171a; border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; }
-  .legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
-  .legend-name { font-weight: 600; flex: 0 1 auto; }
-  .legend-cidr { color: var(--muted); font-family: ui-monospace, monospace; font-size: .78rem; }
-  .legend-note { color: var(--muted); font-size: .78rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* legend list -- a compact table, not boxed cards, so many subnets don't blow up the page height */
+  .legend { display: flex; flex-direction: column; font-size: .8rem; }
+  .legend-row { display: flex; align-items: center; gap: .55rem; padding: .22rem .1rem; border-bottom: 1px solid var(--border); }
+  .legend-row:last-child { border-bottom: none; }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+  .legend-name { font-weight: 600; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+  .legend-cidr { color: var(--muted); font-family: ui-monospace, monospace; font-size: .75rem; flex: 0 0 auto; }
+  .legend-note { color: var(--muted); font-size: .75rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .legend-spacer { flex: 1; }
-  .legend-actions { display: flex; gap: .3rem; flex: 0 0 auto; }
-  .empty-hint { color: var(--muted); font-size: .82rem; font-style: italic; }
+  .legend-actions { display: flex; gap: .25rem; flex: 0 0 auto; }
+  .empty-hint { color: var(--muted); font-size: .8rem; font-style: italic; margin: .2rem 0; }
 
   /* modal */
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 1rem; }
@@ -89,13 +93,13 @@
   .err-box.show { display: block; }
 
   /* toolbar + collapsibles */
-  .toolbar { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+  .toolbar { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
   details.card { padding: 0; }
-  details.card > summary { cursor: pointer; padding: .9rem 1.3rem; font-weight: 600; list-style: none; display: flex; align-items: center; gap: .5rem; }
+  details.card > summary { cursor: pointer; padding: .65rem .9rem; font-weight: 600; font-size: .9rem; list-style: none; display: flex; align-items: center; gap: .5rem; }
   details.card > summary::-webkit-details-marker { display: none; }
   details.card > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
   details.card[open] > summary::before { transform: rotate(90deg); }
-  details.card > .details-body { padding: 0 1.3rem 1.2rem; }
+  details.card > .details-body { padding: 0 .9rem .9rem; }
   .copy-row { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
   pre.prompt { white-space: pre-wrap; background: #14171a; border: 1px solid var(--border); border-radius: 6px; padding: .8rem; font-size: .78rem; color: var(--text); font-family: ui-monospace, monospace; margin: 0; max-height: 360px; overflow: auto; }
 </style>
@@ -222,6 +226,7 @@ function hostInfo(prefix, size) {
 /* ---------------------------------------------------------------- state */
 let state = loadState();
 const drillPaths = {}; // networkId -> array of descendant node ids
+const collapsedNetworks = {}; // networkId -> bool, UI-only (not persisted)
 
 function loadState() {
   try {
@@ -381,7 +386,7 @@ function renderNetworkCard(network) {
     if (seg.type === 'gap') {
       const addrs = seg.p.end - seg.p.start + 1;
       const title = 'Free: ' + fmtCidr(seg.p.start, 0).split('/')[0] + ' - ' + intToIp(seg.p.end) + ' (' + addrs + ' addresses)';
-      return '<div class="seg seg-gap" style="flex-grow:' + grow + '" title="' + esc(title) + '" onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\')">+</div>';
+      return '<div class="seg seg-gap" style="flex-grow:' + grow + '" title="' + esc(title) + '" onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\',' + seg.p.start + ')">+</div>';
     }
     const c = seg.node;
     const color = c.color || PALETTE[0];
@@ -408,10 +413,15 @@ function renderNetworkCard(network) {
     : '<p class="empty-hint">No subnets allocated here yet -- click the bar or "Add subnet" to add one.</p>';
 
   const canDeleteNetwork = crumbs.length === 1;
+  const collapsed = !!collapsedNetworks[network.id];
+  const collapsedSummary = collapsed ? ' · ' + children.length + ' subnet(s), ' + freeAddrs + ' free' : '';
 
   return '<div class="card">' +
     '<div class="net-head">' +
-      '<div><div class="net-title">' + esc(network.name) + '</div><div class="net-cidr">' + esc(current.cidr) + '</div></div>' +
+      '<div class="net-head-left" onclick="toggleNetworkCollapse(\'' + network.id + '\')">' +
+        '<span class="collapse-chevron">' + (collapsed ? '▸' : '▾') + '</span>' +
+        '<div class="net-title-block"><div class="net-title">' + esc(network.name) + '</div><div class="net-cidr">' + esc(current.cidr) + esc(collapsedSummary) + '</div></div>' +
+      '</div>' +
       '<div class="net-actions">' +
         '<button class="icon secondary" onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\')">+ Add subnet</button>' +
         (crumbs.length > 1
@@ -420,11 +430,17 @@ function renderNetworkCard(network) {
         (canDeleteNetwork ? '<button class="icon danger" onclick="deleteNetwork(\'' + network.id + '\')">Delete</button>' : '') +
       '</div>' +
     '</div>' +
-    breadcrumb +
-    '<div class="bar">' + barHtml + '</div>' +
-    '<div class="bar-summary"><span>' + children.length + ' subnet(s) allocated</span><span>' + freeAddrs + ' addresses free (' + freePct + '%)</span></div>' +
-    legendHtml +
+    (collapsed ? '' :
+      breadcrumb +
+      '<div class="bar">' + barHtml + '</div>' +
+      '<div class="bar-summary"><span>' + children.length + ' subnet(s) allocated</span><span>' + freeAddrs + ' addresses free (' + freePct + '%)</span></div>' +
+      legendHtml) +
   '</div>';
+}
+
+function toggleNetworkCollapse(networkId) {
+  collapsedNetworks[networkId] = !collapsedNetworks[networkId];
+  render();
 }
 
 function esc(s) {
@@ -470,13 +486,15 @@ function drillTo(networkId, nodeId) {
 /* ---------------------------------------------------------------- add/edit modal */
 let modalCtx = null;
 
-function openAddModal(networkId, parentNodeId) {
+function openAddModal(networkId, parentNodeId, gapStart) {
   const network = findNetwork(networkId);
   const parent = findNodeById(network, parentNodeId);
   if (!parent) return;
-  modalCtx = { mode: 'add', networkId, parentNodeId };
+  modalCtx = { mode: 'add', networkId, parentNodeId, gapStart: gapStart === undefined ? null : gapStart };
   document.getElementById('modal-title').textContent = 'Add subnet into ' + parent.cidr;
-  document.getElementById('modal-hint').textContent = 'Give a prefix length and, optionally, an exact network address. Leave the address blank to auto-place in the first free gap that fits.';
+  document.getElementById('modal-hint').textContent = modalCtx.gapStart !== null
+    ? 'Give a prefix length and, optionally, an exact network address. Leave the address blank to auto-place within the free area you clicked.'
+    : 'Give a prefix length and, optionally, an exact network address. Leave the address blank to auto-place in the first free gap that fits.';
   document.getElementById('sm-name').value = '';
   document.getElementById('sm-address').value = '';
   document.getElementById('sm-prefix').value = '';
@@ -576,8 +594,21 @@ function submitModal(e) {
     const prefix = parseInt(document.getElementById('sm-prefix').value, 10);
     if (isNaN(prefix) || prefix < 0 || prefix > 32) { showModalErr('Enter a prefix length (0-32).'); return; }
     const gaps = computeGaps(parentParsed, modalCtx.mode === 'edit' ? siblings.filter(s => s.id !== modalCtx.nodeId) : siblings);
-    const placed = placeInFirstFittingGap(gaps, prefix);
-    if (!placed) { showModalErr('No free, aligned gap big enough for a /' + prefix + ' here.'); return; }
+    let placed;
+    if (modalCtx.gapStart !== null && modalCtx.gapStart !== undefined) {
+      // Clicked a specific gap segment -- place within THAT gap, not just
+      // wherever the first fitting gap happens to be.
+      const gap = gaps.find(g => g.start === modalCtx.gapStart);
+      placed = gap ? placeInGap(gap, prefix) : null;
+      if (!placed) {
+        const hint = gap ? (' (largest block this free area can hold: /' + largestPrefixInGap(gap) + ')') : '';
+        showModalErr('Does not fit in the free area you clicked' + hint + '.');
+        return;
+      }
+    } else {
+      placed = placeInFirstFittingGap(gaps, prefix);
+      if (!placed) { showModalErr('No free, aligned gap big enough for a /' + prefix + ' anywhere here.'); return; }
+    }
     childParsed = placed;
   }
 
