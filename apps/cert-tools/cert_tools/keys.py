@@ -43,16 +43,28 @@ def decrypt_private_key(raw: bytes, passphrase: str = ""):
     -- passing it anyway makes openssl try to read a password it doesn't
     need and fail with "Error reading password from BIO", even on an empty
     passphrase.
+
+    An encrypted key also gets `-provider legacy -provider default` added:
+    OpenSSL 3.x's default provider dropped RC2/RC4/single-DES, so a PKCS#8
+    key encrypted with one of those (common from older exports -- old
+    OpenSSL, Java keytool, older router/appliance firmware) fails with a
+    misleading "Could not find private key ... maybe wrong password" even
+    given the *correct* passphrase, unless the legacy provider is loaded
+    alongside the default one. Harmless to add unconditionally for a
+    modern AES/PBKDF2-encrypted key too -- verified live, same result
+    either way -- so there's no need to detect the cipher first and only
+    add it on a first-pass failure.
     """
     encrypted = is_key_encrypted(raw)
     passin = (passphrase + "\n").encode()
+    legacy_flags = ["-provider", "legacy", "-provider", "default"] if encrypted else []
 
     with tempfile.TemporaryDirectory() as td:
         in_path = Path(td) / "in.key"
         in_path.write_bytes(raw)
         out_path = Path(td) / "out.key"
 
-        rsa_args = ["openssl", "rsa", "-in", str(in_path), "-traditional", "-out", str(out_path)]
+        rsa_args = ["openssl", "rsa", "-in", str(in_path), "-traditional", "-out", str(out_path)] + legacy_flags
         if encrypted:
             rsa_args[2:2] = ["-passin", "stdin"]
         proc = _run(rsa_args, input_bytes=passin if encrypted else b"")
@@ -60,7 +72,7 @@ def decrypt_private_key(raw: bytes, passphrase: str = ""):
             return out_path.read_text(), "rsa"
         rsa_err = proc.stderr.decode(errors="replace").strip()
 
-        pkey_args = ["openssl", "pkey", "-in", str(in_path), "-out", str(out_path)]
+        pkey_args = ["openssl", "pkey", "-in", str(in_path), "-out", str(out_path)] + legacy_flags
         if encrypted:
             pkey_args[2:2] = ["-passin", "stdin"]
         proc2 = _run(pkey_args, input_bytes=passin if encrypted else b"")
