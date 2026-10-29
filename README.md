@@ -217,6 +217,21 @@ prompt describing the JSON schema and validation rules, so an AI given a
 description of an existing subnet layout can produce JSON this app will
 import directly.
 
+`apps/cert-tools/` ("Certificate Tools") covers two one-off key/cert
+operations that don't fit cert-inspector (which only ever reads, never
+produces a new file): decrypting a password-protected RSA private key
+(e.g. the key a Mikrotik router exports for an OpenVPN client config) back
+to a plain PEM, and merging a private key with its certificate (plus an
+optional intermediate/CA chain) into a single password-protected PKCS#12
+(`.pfx`) file -- the format Windows/IIS's certificate import expects,
+instead of the three separate PEM files OpenSSL normally hands you. Both
+operations shell out to the system `openssl` (`cert_tools/crypto.py`,
+independent of cert-inspector's own `openssl`-shelling parser); passphrases
+always go in over stdin, never as a CLI argument. The `.pfx` builder has a
+"legacy encryption" toggle (`openssl pkcs12 -export -legacy`) for older
+Windows Server/IIS releases that fail to import a modern OpenSSL-3-encrypted
+`.pfx` with no useful error message.
+
 ### Adding an app module
 
 1. Drop the project under `apps/<name>/`, with its own ASGI application

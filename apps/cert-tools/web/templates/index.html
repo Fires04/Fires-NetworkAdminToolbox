@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Certificate Tools</title>
+<style>
+  :root {
+    --bg: #16181c; --panel: #1f2328; --border: #343a40; --text: #e9ecef;
+    --muted: #8d97a1; --accent: #4dabf7; --ok: #51cf66; --warn: #ffa94d; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .subtitle { color: var(--muted); margin: 0 0 1.25rem; font-size: .92rem; }
+  .tabs { display: flex; gap: .5rem; margin-bottom: 1.1rem; flex-wrap: wrap; }
+  .tab-btn {
+    background: #2a2f36; color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    padding: .55rem 1rem; font-weight: 600; cursor: pointer; font-size: .88rem;
+  }
+  .tab-btn.active { background: var(--accent); color: #06202f; border-color: var(--accent); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem; max-width: 560px;
+  }
+  .tool { display: none; }
+  .tool.active { display: block; }
+  label { display: block; font-size: .82rem; color: var(--muted); margin: .9rem 0 .3rem; }
+  label:first-of-type { margin-top: 0; }
+  .hint { font-size: .76rem; color: var(--muted); margin-top: .25rem; }
+  input[type=text], input[type=password], textarea {
+    width: 100%; background: #14171a; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: .45rem .55rem; font: inherit;
+  }
+  textarea { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: .78rem; resize: vertical; min-height: 90px; }
+  input[type=file] { width: 100%; font-size: .82rem; color: var(--muted); }
+  .row { display: flex; gap: .5rem; }
+  .row > * { flex: 1; }
+  .checkrow { display: flex; align-items: flex-start; gap: .5rem; margin-top: .9rem; }
+  .checkrow input { margin-top: .2rem; }
+  .checkrow label { margin: 0; color: var(--text); font-size: .85rem; }
+  button {
+    background: var(--accent); color: #06202f; border: none; border-radius: 6px;
+    padding: .6rem .9rem; font-weight: 600; cursor: pointer; width: 100%; margin-top: 1rem;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.secondary { background: #2a2f36; color: var(--text); border: 1px solid var(--border); width: auto; margin-top: .6rem; }
+  #status-decrypt, #status-merge { font-size: .85rem; color: var(--muted); min-height: 1.2em; margin-top: .6rem; white-space: pre-wrap; }
+  #status-decrypt.err, #status-merge.err { color: var(--bad); }
+  #status-decrypt.ok, #status-merge.ok { color: var(--ok); }
+  .result { margin-top: 1rem; display: none; }
+  .divider { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: .8rem; margin: 1.3rem 0 .2rem; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  details { margin-top: 1.4rem; }
+  details summary { cursor: pointer; color: var(--accent); font-size: .85rem; }
+  details .body { font-size: .83rem; color: var(--muted); margin-top: .6rem; }
+  details pre {
+    white-space: pre-wrap; font-size: .76rem; background: #101214; border: 1px solid var(--border);
+    border-radius: 6px; padding: .7rem; margin-top: .5rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>Certificate Tools</h1>
+<p class="subtitle">Decrypt a password-protected private key, or merge a key + certificate into a .pfx for Windows/IIS import. All via the system openssl -- nothing is kept after the request.</p>
+
+<div class="tabs">
+  <button class="tab-btn active" id="tabbtn-decrypt" onclick="showTool('decrypt')">Decrypt private key</button>
+  <button class="tab-btn" id="tabbtn-merge" onclick="showTool('merge')">Merge key + cert &rarr; .pfx</button>
+</div>
+
+<!-- Decrypt private key -->
+<div class="panel tool active" id="tool-decrypt">
+  <label for="d-keyfile">Private key file</label>
+  <input type="file" id="d-keyfile">
+  <label for="d-keytext">...or paste it</label>
+  <textarea id="d-keytext" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;Proc-Type: 4,ENCRYPTED&#10;..."></textarea>
+  <label for="d-pass">Passphrase</label>
+  <input type="password" id="d-pass" autocomplete="off">
+  <div class="hint">Leave blank if the key isn't encrypted.</div>
+  <button onclick="doDecrypt()">Decrypt</button>
+  <div id="status-decrypt"></div>
+  <div class="result" id="d-result">
+    <label for="d-out">Decrypted PEM</label>
+    <textarea id="d-out" readonly style="min-height: 160px;"></textarea>
+    <button class="secondary" onclick="downloadText(document.getElementById('d-out').value, 'decrypted.key')">Download .key</button>
+    <button class="secondary" onclick="copyText(document.getElementById('d-out').value)">Copy</button>
+  </div>
+</div>
+
+<!-- Merge key + cert into .pfx -->
+<div class="panel tool" id="tool-merge">
+  <label for="m-keyfile">Private key</label>
+  <input type="file" id="m-keyfile">
+  <textarea id="m-keytext" placeholder="...or paste the private key PEM"></textarea>
+  <label for="m-keypass">Key passphrase</label>
+  <input type="password" id="m-keypass" autocomplete="off">
+  <div class="hint">Only needed if the key above is still encrypted.</div>
+
+  <label for="m-certfile">Certificate</label>
+  <input type="file" id="m-certfile">
+  <textarea id="m-certtext" placeholder="...or paste the certificate PEM"></textarea>
+
+  <label for="m-chainfile">Intermediate/CA chain (optional)</label>
+  <input type="file" id="m-chainfile">
+  <textarea id="m-chaintext" placeholder="...or paste one or more intermediate certificates, concatenated"></textarea>
+
+  <div class="row">
+    <div>
+      <label for="m-name">Friendly name</label>
+      <input type="text" id="m-name" placeholder="certificate">
+    </div>
+    <div>
+      <label for="m-exppass">.pfx password</label>
+      <input type="password" id="m-exppass" autocomplete="off">
+    </div>
+  </div>
+
+  <div class="checkrow">
+    <input type="checkbox" id="m-legacy">
+    <label for="m-legacy">Legacy encryption (tick this if an older Windows Server/IIS refuses to import the .pfx with no useful error -- OpenSSL 3's modern default isn't compatible with it)</label>
+  </div>
+
+  <button onclick="doMerge()">Build .pfx</button>
+  <div id="status-merge"></div>
+</div>
+
+<details>
+  <summary>About these two tools</summary>
+  <div class="body">
+    <p><b>Decrypt private key</b> turns a password-protected RSA key -- e.g. the key a Mikrotik router exports for an OpenVPN client config -- into a plain PEM you can paste straight into a config file, with no further prompts for a passphrase at connect time.</p>
+    <p><b>Merge key + cert &rarr; .pfx</b> bundles a private key together with its certificate (and, optionally, the intermediate/CA chain) into one password-protected PKCS#12 (.pfx) file -- the single-file format Windows Certificate Manager / IIS's "Complete Certificate Request" / "Import" wants, instead of three separate PEM files.</p>
+    <p>Nothing uploaded here is written to disk outside a short-lived temp directory for the duration of the request, and nothing is logged or retained afterward.</p>
+  </div>
+</details>
+
+<script>
+function showTool(name) {
+  document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tool-' + name).classList.add('active');
+  document.getElementById('tabbtn-' + name).classList.add('active');
+}
+
+function setStatus(id, msg, cls) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = cls ? cls : '';
+}
+
+function downloadText(text, filename) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e2) {}
+    ta.remove();
+  }
+}
+
+async function doDecrypt() {
+  setStatus('status-decrypt', 'Decrypting...', '');
+  document.getElementById('d-result').style.display = 'none';
+
+  const fd = new FormData();
+  const file = document.getElementById('d-keyfile').files[0];
+  if (file) fd.append('key_file', file);
+  fd.append('key_text', document.getElementById('d-keytext').value);
+  fd.append('passphrase', document.getElementById('d-pass').value);
+
+  try {
+    const resp = await fetch('api/decrypt-key', { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setStatus('status-decrypt', data.error || 'decryption failed', 'err');
+      return;
+    }
+    document.getElementById('d-out').value = data.pem;
+    document.getElementById('d-result').style.display = 'block';
+    setStatus('status-decrypt',
+      data.was_encrypted ? 'Decrypted successfully.' : 'Key was not encrypted -- returned as-is (re-written in traditional PEM form).',
+      'ok');
+  } catch (e) {
+    setStatus('status-decrypt', 'request failed: ' + e, 'err');
+  }
+}
+
+async function doMerge() {
+  setStatus('status-merge', 'Building .pfx...', '');
+
+  const fd = new FormData();
+  const keyFile = document.getElementById('m-keyfile').files[0];
+  if (keyFile) fd.append('key_file', keyFile);
+  fd.append('key_text', document.getElementById('m-keytext').value);
+  fd.append('key_passphrase', document.getElementById('m-keypass').value);
+
+  const certFile = document.getElementById('m-certfile').files[0];
+  if (certFile) fd.append('cert_file', certFile);
+  fd.append('cert_text', document.getElementById('m-certtext').value);
+
+  const chainFile = document.getElementById('m-chainfile').files[0];
+  if (chainFile) fd.append('chain_file', chainFile);
+  fd.append('chain_text', document.getElementById('m-chaintext').value);
+
+  fd.append('friendly_name', document.getElementById('m-name').value);
+  fd.append('export_password', document.getElementById('m-exppass').value);
+  fd.append('legacy', document.getElementById('m-legacy').checked ? 'true' : 'false');
+
+  try {
+    const resp = await fetch('api/merge-pfx', { method: 'POST', body: fd });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      setStatus('status-merge', data.error || 'build failed', 'err');
+      return;
+    }
+    const blob = await resp.blob();
+    let filename = 'certificate.pfx';
+    const disp = resp.headers.get('Content-Disposition') || '';
+    const m = disp.match(/filename="([^"]+)"/);
+    if (m) filename = m[1];
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    setStatus('status-merge', 'Downloaded ' + filename + '.', 'ok');
+  } catch (e) {
+    setStatus('status-merge', 'request failed: ' + e, 'err');
+  }
+}
+</script>
+
+</body>
+</html>
