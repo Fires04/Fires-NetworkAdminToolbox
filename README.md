@@ -162,7 +162,7 @@ No child process, no extra port.
 [NetworkAdminToolbox](https://github.com/Fires04/NetworkAdminToolbox)) is
 an example: a FastAPI app (`web.app:app`) with its own `pyproject.toml`.
 
-`apps/cert-inspector/` ("Certificate Tools") is three certificate/key
+`apps/cert-tools/` ("Certificate Tools") is three certificate/key
 operations in one app, switched between via tabs:
 
 - **Inspect chain** is a certificate chain debugger: drag & drop a
@@ -193,9 +193,9 @@ operations in one app, switched between via tabs:
   message.
 
 All three shell out to the system `openssl` -- chain inspection via
-`cert_inspector/parser.py` (same approach, but no shared code, as
+`cert_tools/parser.py` (same approach, but no shared code, as
 `cli_scripts/protocol_tester.py --check-chain`), key decrypt/merge via the
-separate `cert_inspector/keys.py`; passphrases always go in over stdin,
+separate `cert_tools/keys.py`; passphrases always go in over stdin,
 never as a CLI argument.
 
 `apps/panos-filter-builder/` ("PAN-OS Filter Builder") builds a PAN-OS

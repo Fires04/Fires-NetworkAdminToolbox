@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cert-inspector"
+name = "cert-tools"
 version = "0.1.0"
-description = "Certificate chain inspector -- drag & drop or live host, full chain + diagnostics"
+description = "Certificate chain inspector + private key decrypt/merge-to-pfx -- drag & drop or live host"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110.0",
@@ -15,4 +15,4 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cert_inspector*"]
+include = ["cert_tools*"]

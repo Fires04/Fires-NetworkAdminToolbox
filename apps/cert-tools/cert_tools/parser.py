@@ -1,4 +1,4 @@
-"""cert_inspector.parser -- certificate parsing and chain-building via the
+"""cert_tools.parser -- certificate parsing and chain-building via the
 system `openssl` CLI.
 
 Same approach as cli_scripts/protocol_tester.py's --check-chain (shell out

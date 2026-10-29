@@ -1,15 +1,15 @@
-"""Certificate Inspector -- FastAPI web application.
+"""Certificate Tools -- FastAPI web application.
 
 Drag & drop (or paste, or fetch live from a host) a certificate or bundle
 and see the *whole* chain -- not just the leaf -- with per-certificate
 validity, extensions, fingerprints, a visual chain diagram, and chain
 verification against the system trust store (live or offline). All X.509
-parsing goes through the system `openssl` CLI (cert_inspector/parser.py),
+parsing goes through the system `openssl` CLI (cert_tools/parser.py),
 the same approach cli_scripts/protocol_tester.py's --check-chain uses, but
 this app is otherwise independent of it -- no shared code between the two.
 
 Also covers two one-off key/cert operations that don't fit the read-only
-inspector above (cert_inspector/keys.py, also openssl-CLI-backed but no
+inspector above (cert_tools/keys.py, also openssl-CLI-backed but no
 shared code with parser.py): decrypting a password-protected private key,
 and merging a key + certificate into a PKCS#12 (.pfx) for Windows/IIS
 import. Grouped into this same app (rather than a separate one) since all
@@ -23,8 +23,8 @@ from typing import Annotated
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-from cert_inspector.keys import build_pfx, decrypt_private_key, is_key_encrypted
-from cert_inspector.parser import (
+from cert_tools.keys import build_pfx, decrypt_private_key, is_key_encrypted
+from cert_tools.parser import (
     build_chains,
     describe_cert,
     extract_pkcs12_certs,
@@ -34,7 +34,7 @@ from cert_inspector.parser import (
     verify_chain_locally,
 )
 
-app = FastAPI(title="Certificate Inspector")
+app = FastAPI(title="Certificate Tools")
 
 BASE_DIR = Path(__file__).resolve().parent
 _INDEX_HTML = (BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8")

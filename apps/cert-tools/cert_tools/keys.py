@@ -1,4 +1,4 @@
-"""cert_inspector.keys -- private key decryption and PKCS#12 (.pfx)
+"""cert_tools.keys -- private key decryption and PKCS#12 (.pfx)
 bundling via the system `openssl` CLI.
 
 Separate module from parser.py (shells out to `openssl` too, but a

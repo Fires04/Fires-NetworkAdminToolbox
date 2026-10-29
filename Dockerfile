@@ -15,7 +15,7 @@ WORKDIR /srv/toolbox
 # openssl: protocol_tester.py's -p https --check-chain shells out to
 #   `openssl s_client`/`x509` to read the full certificate chain (leaf +
 #   intermediates) -- Python's own ssl module only ever exposes the leaf.
-#   Also used by cert-inspector (chain parsing/verification, key decrypt,
+#   Also used by cert-tools (chain parsing/verification, key decrypt,
 #   key+cert -> .pfx).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
@@ -31,7 +31,7 @@ COPY . .
 # install line -- see README's "Adding an app module" section.
 RUN pip install --no-cache-dir -r webui/requirements.txt && \
     pip install --no-cache-dir ./apps/switch-visualizer && \
-    pip install --no-cache-dir ./apps/cert-inspector
+    pip install --no-cache-dir ./apps/cert-tools
 
 # cli_scripts/requirements.txt: paramiko (protocol_tester.py's -p sftp login
 # + directory listing -- stdlib has no SSH client) and playwright (used by
