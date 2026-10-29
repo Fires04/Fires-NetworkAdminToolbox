@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Certificate Tools</title>
+<link rel="icon" href="data:,">
 <style>
   :root {
     --bg: #16181c; --panel: #1f2328; --border: #343a40; --text: #e9ecef;
@@ -60,7 +61,10 @@
   .checkrow input { margin-top: .2rem; width: auto; }
   .checkrow label { margin: 0; color: var(--text); font-size: .85rem; }
 
-  #status, #status-decrypt, #status-merge { font-size: .85rem; color: var(--muted); min-height: 1.2em; margin-top: .6rem; white-space: pre-wrap; }
+  #status, #status-decrypt, #status-merge {
+    font-size: .85rem; color: var(--muted); min-height: 1.2em; margin-top: .6rem;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  }
   #status.err, #status-decrypt.err, #status-merge.err { color: var(--bad); }
   #status-decrypt.ok, #status-merge.ok { color: var(--ok); }
 
@@ -101,6 +105,14 @@
   }
   .empty { color: var(--muted); font-size: .9rem; padding: 2rem 0; text-align: center; }
 
+  /* Visible keyboard-focus ring -- buttons/inputs/the dropzone otherwise
+     rely on the browser default, which some engines render too faintly
+     (or not at all) against this dark theme to actually see where focus is. */
+  a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
   /* Top-level tool switcher -- small, content-sized tabs, not full-row buttons. */
   .tabs { display: flex; gap: .5rem; margin-bottom: 1.1rem; flex-wrap: wrap; }
   .tab-btn {
@@ -128,44 +140,44 @@
 <h1>Certificate Tools</h1>
 <p class="subtitle">Inspect a certificate chain, decrypt a password-protected private key, or merge a key + certificate into a .pfx for Windows/IIS import.</p>
 
-<div class="tabs">
-  <button class="tab-btn active" id="tabbtn-inspect" onclick="showTool('inspect')">Inspect chain</button>
-  <button class="tab-btn" id="tabbtn-decrypt" onclick="showTool('decrypt')">Decrypt private key</button>
-  <button class="tab-btn" id="tabbtn-merge" onclick="showTool('merge')">Merge key + cert &rarr; .pfx</button>
+<div class="tabs" role="tablist">
+  <button type="button" class="tab-btn active" id="tabbtn-inspect" role="tab" aria-selected="true" aria-controls="tool-inspect" onclick="showTool('inspect')">Inspect chain</button>
+  <button type="button" class="tab-btn" id="tabbtn-decrypt" role="tab" aria-selected="false" aria-controls="tool-decrypt" onclick="showTool('decrypt')">Decrypt private key</button>
+  <button type="button" class="tab-btn" id="tabbtn-merge" role="tab" aria-selected="false" aria-controls="tool-merge" onclick="showTool('merge')">Merge key + cert &rarr; .pfx</button>
 </div>
 
 <!-- Inspect chain -->
-<div class="tool active" id="tool-inspect">
+<div class="tool active" id="tool-inspect" role="tabpanel" aria-labelledby="tabbtn-inspect">
 <div class="layout">
-  <div id="inputPanel" class="panel">
-    <label>Certificate file(s)</label>
-    <div id="dropzone">
+  <form id="inputPanel" class="panel" onsubmit="return false;">
+    <label id="dropzone-label">Certificate file(s)</label>
+    <div id="dropzone" role="button" tabindex="0" aria-labelledby="dropzone-label">
       Drop a .pem / .crt / .cer / .der / .pfx / .p12 file here<br>(or a full chain bundle)<br>or click to browse
       <div class="fname" id="fname"></div>
     </div>
     <input type="file" id="fileInput" multiple style="display:none">
 
-    <label>...or paste PEM text</label>
+    <label for="pemText">...or paste PEM text</label>
     <textarea id="pemText" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
 
-    <label>PFX/P12 password <span style="color:var(--muted)">(only needed for those, leave blank otherwise)</span></label>
+    <label for="pfxPassword">PFX/P12 password <span style="color:var(--muted)">(only needed for those, leave blank otherwise)</span></label>
     <input type="password" id="pfxPassword" placeholder="" autocomplete="off">
 
-    <label>Expected hostname <span style="color:var(--muted)">(optional)</span></label>
+    <label for="expectHost">Expected hostname <span style="color:var(--muted)">(optional)</span></label>
     <input type="text" id="expectHost" placeholder="example.com">
 
-    <button class="block" id="parseBtn">Parse certificate(s)</button>
+    <button type="button" class="block" id="parseBtn">Parse certificate(s)</button>
 
     <div class="divider">or test a live host</div>
-    <label>Hostname</label>
+    <label for="liveHost">Hostname</label>
     <div class="row">
       <input type="text" id="liveHost" placeholder="example.com">
-      <input type="number" id="livePort" placeholder="443" style="flex:0 0 90px">
+      <input type="number" id="livePort" placeholder="443" aria-label="Port" style="flex:0 0 90px">
     </div>
-    <button class="block live" id="checkBtn">Fetch &amp; test live chain</button>
+    <button type="button" class="block live" id="checkBtn">Fetch &amp; test live chain</button>
 
-    <div id="status"></div>
-  </div>
+    <div id="status" aria-live="polite"></div>
+  </form>
 
   <div id="results">
     <div class="empty">Drop a certificate, paste one, or test a live host to see results here.</div>
@@ -174,8 +186,8 @@
 </div>
 
 <!-- Decrypt private key -->
-<div class="tool" id="tool-decrypt">
-<div class="panel" style="width:340px">
+<div class="tool" id="tool-decrypt" role="tabpanel" aria-labelledby="tabbtn-decrypt">
+<form class="panel" style="width:340px" onsubmit="return false;">
   <label for="d-keyfile">Private key file</label>
   <input type="file" id="d-keyfile">
   <label for="d-keytext">...or paste it</label>
@@ -183,36 +195,36 @@
   <label for="d-pass">Passphrase</label>
   <input type="password" id="d-pass" autocomplete="off">
   <div class="hint">Leave blank if the key isn't encrypted.</div>
-  <button class="block" onclick="doDecrypt()">Decrypt</button>
-  <div id="status-decrypt"></div>
+  <button type="button" class="block" onclick="doDecrypt()">Decrypt</button>
+  <div id="status-decrypt" aria-live="polite"></div>
   <div class="result" id="d-result">
     <label for="d-out">Decrypted PEM</label>
     <textarea id="d-out" readonly rows="8"></textarea>
     <div class="btnrow">
-      <button class="secondary" onclick="downloadText(document.getElementById('d-out').value, 'decrypted.key')">Download .key</button>
-      <button class="secondary" onclick="copyText(document.getElementById('d-out').value)">Copy</button>
+      <button type="button" class="secondary" onclick="downloadText(document.getElementById('d-out').value, 'decrypted.key')">Download .key</button>
+      <button type="button" class="secondary" onclick="copyText(document.getElementById('d-out').value, this)">Copy</button>
     </div>
   </div>
-</div>
+</form>
 </div>
 
 <!-- Merge key + cert into .pfx -->
-<div class="tool" id="tool-merge">
-<div class="panel" style="width:480px">
+<div class="tool" id="tool-merge" role="tabpanel" aria-labelledby="tabbtn-merge">
+<form class="panel" style="width:480px" onsubmit="return false;">
   <label for="m-keyfile">Private key</label>
   <input type="file" id="m-keyfile">
-  <textarea id="m-keytext" rows="4" placeholder="...or paste the private key PEM"></textarea>
+  <textarea id="m-keytext" rows="4" placeholder="...or paste the private key PEM" aria-label="Private key PEM"></textarea>
   <label for="m-keypass">Key passphrase</label>
   <input type="password" id="m-keypass" autocomplete="off">
   <div class="hint">Only needed if the key above is still encrypted.</div>
 
   <label for="m-certfile">Certificate</label>
   <input type="file" id="m-certfile">
-  <textarea id="m-certtext" rows="4" placeholder="...or paste the certificate PEM"></textarea>
+  <textarea id="m-certtext" rows="4" placeholder="...or paste the certificate PEM" aria-label="Certificate PEM"></textarea>
 
   <label for="m-chainfile">Intermediate/CA chain (optional)</label>
   <input type="file" id="m-chainfile">
-  <textarea id="m-chaintext" rows="4" placeholder="...or paste one or more intermediate certificates, concatenated"></textarea>
+  <textarea id="m-chaintext" rows="4" placeholder="...or paste one or more intermediate certificates, concatenated" aria-label="Intermediate/CA chain PEM"></textarea>
 
   <div class="row">
     <div>
@@ -230,27 +242,53 @@
     <label for="m-legacy">Legacy encryption (tick this if an older Windows Server/IIS refuses to import the .pfx with no useful error -- OpenSSL 3's modern default isn't compatible with it)</label>
   </div>
 
-  <button class="block" onclick="doMerge()">Build .pfx</button>
-  <div id="status-merge"></div>
-</div>
+  <button type="button" class="block" onclick="doMerge()">Build .pfx</button>
+  <div id="status-merge" aria-live="polite"></div>
+</form>
 </div>
 
 <script>
 function showTool(name) {
   document.querySelectorAll('.tool').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => {
+    el.classList.remove('active');
+    el.setAttribute('aria-selected', 'false');
+  });
   document.getElementById('tool-' + name).classList.add('active');
-  document.getElementById('tabbtn-' + name).classList.add('active');
+  const btn = document.getElementById('tabbtn-' + name);
+  btn.classList.add('active');
+  btn.setAttribute('aria-selected', 'true');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Shared by all three tabs' status line: a plain message, or -- when the
+// backend also sent a raw openssl "detail" distinct from the friendly
+// headline -- the headline plus a collapsed <details> toggle to reveal it,
+// so the full openssl output (useful for genuinely debugging something) is
+// still one click away instead of dumped inline as the first thing seen.
+function renderStatus(id, msg, cls, detail) {
+  const el = document.getElementById(id);
+  el.className = cls || '';
+  if (detail && detail !== msg) {
+    el.innerHTML = `${esc(msg)} <details style="display:inline"><summary style="display:inline">details</summary><pre>${esc(detail)}</pre></details>`;
+  } else {
+    el.textContent = msg || '';
+  }
 }
 
 // --- Inspect chain -----------------------------------------------------
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const fname = document.getElementById('fname');
-const statusEl = document.getElementById('status');
 const results = document.getElementById('results');
 
 dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+});
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
 dropzone.addEventListener('drop', e => {
@@ -265,13 +303,8 @@ function updateFname() {
   fname.textContent = names.join(', ');
 }
 
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-function setStatus(msg, isErr) {
-  statusEl.textContent = msg || '';
-  statusEl.className = isErr ? 'err' : '';
+function setStatus(msg, isErr, detail) {
+  renderStatus('status', msg, isErr ? 'err' : '', detail);
 }
 
 document.getElementById('parseBtn').addEventListener('click', async () => {
@@ -305,14 +338,23 @@ document.getElementById('checkBtn').addEventListener('click', runLiveCheck);
 
 async function run(url, fd) {
   setStatus('Working…');
+  // Clear any previous run's results up front -- otherwise a failed rerun
+  // (e.g. invalid PEM after a successful parse) leaves the old chain/cards
+  // on screen next to an error that applies to the new, different input.
+  results.innerHTML = '<div class="empty">Working…</div>';
   try {
     const resp = await fetch(url, {method: 'POST', body: fd});
     const data = await resp.json();
-    if (!resp.ok) { setStatus(data.error || 'request failed', true); return; }
+    if (!resp.ok) {
+      setStatus(data.error || 'request failed', true, data.detail);
+      results.innerHTML = '<div class="empty">No results -- see error above.</div>';
+      return;
+    }
     setStatus('');
     render(data);
   } catch (err) {
     setStatus(String(err), true);
+    results.innerHTML = '<div class="empty">No results -- see error above.</div>';
   }
 }
 
@@ -417,10 +459,8 @@ function render(data) {
 }
 
 // --- Decrypt private key / Merge to .pfx --------------------------------
-function setToolStatus(id, msg, cls) {
-  const el = document.getElementById(id);
-  el.textContent = msg;
-  el.className = cls ? cls : '';
+function setToolStatus(id, msg, cls, detail) {
+  renderStatus(id, msg, cls, detail);
 }
 
 function downloadText(text, filename) {
@@ -432,21 +472,29 @@ function downloadText(text, filename) {
   URL.revokeObjectURL(url);
 }
 
-async function copyText(text) {
+async function copyText(text, btn) {
+  let ok = true;
   try {
     await navigator.clipboard.writeText(text);
   } catch (e) {
     const ta = document.createElement('textarea');
     ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
     document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); } catch (e2) {}
+    try { document.execCommand('copy'); } catch (e2) { ok = false; }
     ta.remove();
+  }
+  if (btn) {
+    const original = btn.textContent;
+    btn.textContent = ok ? 'Copied!' : 'Copy failed';
+    btn.disabled = true;
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1500);
   }
 }
 
 async function doDecrypt() {
   setToolStatus('status-decrypt', 'Decrypting...', '');
   document.getElementById('d-result').style.display = 'none';
+  document.getElementById('d-out').value = '';
 
   const fd = new FormData();
   const file = document.getElementById('d-keyfile').files[0];
@@ -458,7 +506,7 @@ async function doDecrypt() {
     const resp = await fetch('api/decrypt-key', { method: 'POST', body: fd });
     const data = await resp.json();
     if (!resp.ok) {
-      setToolStatus('status-decrypt', data.error || 'decryption failed', 'err');
+      setToolStatus('status-decrypt', data.error || 'decryption failed', 'err', data.detail);
       return;
     }
     document.getElementById('d-out').value = data.pem;
@@ -496,7 +544,7 @@ async function doMerge() {
     const resp = await fetch('api/merge-pfx', { method: 'POST', body: fd });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
-      setToolStatus('status-merge', data.error || 'build failed', 'err');
+      setToolStatus('status-merge', data.error || 'build failed', 'err', data.detail);
       return;
     }
     const blob = await resp.blob();

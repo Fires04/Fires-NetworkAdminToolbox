@@ -40,6 +40,26 @@ BASE_DIR = Path(__file__).resolve().parent
 _INDEX_HTML = (BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8")
 
 
+def _friendly_openssl_error(raw: str) -> str:
+    """openssl's own error output is multi-line, full of /tmp file paths and
+    internal provider error codes (e.g. "ossl_cipher_unpadblock:bad
+    decrypt") -- fine for a details toggle, useless as the headline
+    message. Map the handful of cases that actually come up to a short
+    sentence; callers still send the raw text back too (as "detail"), for
+    anyone who wants to see exactly what openssl said.
+    """
+    low = raw.lower()
+    if any(s in low for s in ("bad decrypt", "pkcs12_pbe_crypt_ex", "mac verify failure",
+                               "error reading password", "could not find private key",
+                               "bad password")):
+        return "Wrong passphrase, or not a valid encrypted private key."
+    if "no cert in" in low or "does not match" in low or "key values mismatch" in low:
+        return "This certificate doesn't match the private key."
+    if "unable to load certificate" in low or "no start line" in low:
+        return "Could not parse this as a certificate."
+    return "openssl could not process this -- see details below."
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(content=_INDEX_HTML)
@@ -119,12 +139,16 @@ async def api_parse(
 
     pem_blocks = normalize_to_pem_blocks(raw)
     pkcs12_error = None
-    if not pem_blocks and raw.strip():
+    if not pem_blocks and file_contents:
         # Not PEM text and not a bare DER certificate -- the remaining
-        # likely case for binary input is a PKCS#12 (.pfx/.p12) bundle.
-        # Try each uploaded file's own exact bytes (not the joined blob --
-        # PKCS#12 is one binary structure, it doesn't concatenate like PEM).
-        for content in (file_contents or [raw]):
+        # likely case for binary *file* input is a PKCS#12 (.pfx/.p12)
+        # bundle. Try each uploaded file's own exact bytes (not the joined
+        # blob -- PKCS#12 is one binary structure, it doesn't concatenate
+        # like PEM). Deliberately *not* attempted on bare pasted text (no
+        # file_contents): PKCS#12 is a binary format nobody pastes as text,
+        # so trying it there only produces a misleading "wrong password?"
+        # for what's actually just invalid/incomplete PEM.
+        for content in file_contents:
             try:
                 pem_blocks = extract_pkcs12_certs(content, password)
                 pkcs12_error = None
@@ -133,9 +157,10 @@ async def api_parse(
                 pkcs12_error = str(e)
 
     if not pem_blocks:
+        if pkcs12_error:
+            return JSONResponse({"error": pkcs12_error}, status_code=400)
         return JSONResponse(
-            {"error": pkcs12_error or
-             "no certificate found (drop a PEM/DER/PFX file, a PEM bundle, or paste PEM text)"},
+            {"error": "No certificate found (drop a PEM/DER/PFX file, a PEM bundle, or paste PEM text)."},
             status_code=400,
         )
     return _build_result(pem_blocks, expected_hostname=hostname or None, verify_locally=True)
@@ -183,7 +208,14 @@ async def api_decrypt_key(
     try:
         pem, key_format = decrypt_private_key(raw, passphrase)
     except RuntimeError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        detail = str(e)
+        # Our own two hand-written messages (empty key, no passphrase given
+        # for an encrypted one) are already short and friendly -- only the
+        # raw openssl dump (wrong/unexpected format, actually-wrong
+        # passphrase) needs translating.
+        error = detail if detail.startswith(("this key is encrypted", "could not read key --")) \
+            else _friendly_openssl_error(detail)
+        return JSONResponse({"error": error, "detail": detail}, status_code=400)
 
     return {"pem": pem, "format": key_format, "was_encrypted": is_key_encrypted(raw)}
 
@@ -218,7 +250,10 @@ async def api_merge_pfx(
             export_password, friendly_name=friendly_name, legacy=legacy,
         )
     except RuntimeError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        detail = str(e)
+        error = detail if detail.startswith(("this key is encrypted", "could not read key --")) \
+            else _friendly_openssl_error(detail)
+        return JSONResponse({"error": error, "detail": detail}, status_code=400)
 
     # Sanitize before it lands in a Content-Disposition header value --
     # friendly_name is free user text (not just the pkcs12 -name field).
