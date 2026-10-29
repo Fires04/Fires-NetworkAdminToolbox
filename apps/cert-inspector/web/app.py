@@ -7,13 +7,23 @@ verification against the system trust store (live or offline). All X.509
 parsing goes through the system `openssl` CLI (cert_inspector/parser.py),
 the same approach cli_scripts/protocol_tester.py's --check-chain uses, but
 this app is otherwise independent of it -- no shared code between the two.
+
+Also covers two one-off key/cert operations that don't fit the read-only
+inspector above (cert_inspector/keys.py, also openssl-CLI-backed but no
+shared code with parser.py): decrypting a password-protected private key,
+and merging a key + certificate into a PKCS#12 (.pfx) for Windows/IIS
+import. Grouped into this same app (rather than a separate one) since all
+three are "do something with a cert/key file" and a user reaching for one
+is likely to want another.
 """
+import re
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from cert_inspector.keys import build_pfx, decrypt_private_key, is_key_encrypted
 from cert_inspector.parser import (
     build_chains,
     describe_cert,
@@ -151,4 +161,71 @@ async def api_check(
             "verify_ok": fetched["verify_ok"],
             "verify_message": fetched["verify_message"],
         },
+    )
+
+
+async def _read_key_input(key_file: UploadFile | None, key_text: str) -> bytes:
+    if key_file is not None and key_file.filename:
+        return await key_file.read()
+    return key_text.encode()
+
+
+@app.post("/api/decrypt-key")
+async def api_decrypt_key(
+    key_file: Annotated[UploadFile | None, File()] = None,
+    key_text: Annotated[str, Form()] = "",
+    passphrase: Annotated[str, Form()] = "",
+):
+    raw = await _read_key_input(key_file, key_text)
+    if not raw.strip():
+        return JSONResponse({"error": "paste a key or choose a file"}, status_code=400)
+
+    try:
+        pem, key_format = decrypt_private_key(raw, passphrase)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    return {"pem": pem, "format": key_format, "was_encrypted": is_key_encrypted(raw)}
+
+
+@app.post("/api/merge-pfx")
+async def api_merge_pfx(
+    key_file: Annotated[UploadFile | None, File()] = None,
+    key_text: Annotated[str, Form()] = "",
+    key_passphrase: Annotated[str, Form()] = "",
+    cert_file: Annotated[UploadFile | None, File()] = None,
+    cert_text: Annotated[str, Form()] = "",
+    chain_file: Annotated[UploadFile | None, File()] = None,
+    chain_text: Annotated[str, Form()] = "",
+    export_password: Annotated[str, Form()] = "",
+    friendly_name: Annotated[str, Form()] = "",
+    legacy: Annotated[bool, Form()] = False,
+):
+    key_raw = await _read_key_input(key_file, key_text)
+    cert_raw = await _read_key_input(cert_file, cert_text)
+    chain_raw = await _read_key_input(chain_file, chain_text)
+
+    if not key_raw.strip():
+        return JSONResponse({"error": "private key is required"}, status_code=400)
+    if not cert_raw.strip():
+        return JSONResponse({"error": "certificate is required"}, status_code=400)
+    if not export_password:
+        return JSONResponse({"error": "set a password for the .pfx file"}, status_code=400)
+
+    try:
+        pfx_bytes = build_pfx(
+            key_raw, key_passphrase, cert_raw, chain_raw or None,
+            export_password, friendly_name=friendly_name, legacy=legacy,
+        )
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    # Sanitize before it lands in a Content-Disposition header value --
+    # friendly_name is free user text (not just the pkcs12 -name field).
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", friendly_name).strip("_") or "certificate"
+    filename = f"{safe_name}.pfx"
+    return Response(
+        content=pfx_bytes,
+        media_type="application/x-pkcs12",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

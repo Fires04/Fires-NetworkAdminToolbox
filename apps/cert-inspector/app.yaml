@@ -1,2 +1,2 @@
-description: "Drag & drop a certificate (or paste one, or test a live host) and see the full chain, a visual diagram, and every field useful for debugging a TLS problem."
+description: "Drag & drop a certificate (or paste one, or test a live host) and see the full chain, a visual diagram, and every field useful for debugging a TLS problem. Also decrypts private keys and merges a key+cert into a .pfx for Windows/IIS import."
 app: "web.app:app"

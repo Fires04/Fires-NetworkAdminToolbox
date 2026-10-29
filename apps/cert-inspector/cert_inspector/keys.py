@@ -1,9 +1,10 @@
-"""cert_tools.crypto -- private key decryption and PKCS#12 (.pfx) bundling
-via the system `openssl` CLI.
+"""cert_inspector.keys -- private key decryption and PKCS#12 (.pfx)
+bundling via the system `openssl` CLI.
 
-Same approach as cert_inspector/parser.py (shell out to `openssl`, no extra
-Python X.509 dependency) -- these two apps are otherwise independent, no
-shared code between them.
+Separate module from parser.py (shells out to `openssl` too, but a
+different subcommand family and no shared code) -- parser.py only ever
+reads/diagnoses certificates, this module decrypts a key or produces a new
+file, so keeping them apart avoids one giant file mixing both concerns.
 
 Passphrases are always fed over stdin (`-passin stdin` / `-passout stdin`),
 never as a `-passin pass:...` / `-passout pass:...` argument, so they never

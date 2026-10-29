@@ -1,2 +1,0 @@
-description: "Decrypt a password-protected RSA key (e.g. a Mikrotik OpenVPN export), or merge a key + certificate into a .pfx for Windows/IIS import."
-app: "web.app:app"

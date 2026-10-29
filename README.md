@@ -162,24 +162,41 @@ No child process, no extra port.
 [NetworkAdminToolbox](https://github.com/Fires04/NetworkAdminToolbox)) is
 an example: a FastAPI app (`web.app:app`) with its own `pyproject.toml`.
 
-`apps/cert-inspector/` ("Certificate Inspector") is a certificate chain
-debugger: drag & drop a certificate or a full exported chain bundle (or
-paste PEM text), or point it at a live host/port instead, and it shows the
-*whole* chain -- not just the leaf, which is all a plain TLS connection
-ever exposes -- as a visual leaf-to-root diagram plus a detail card per
-certificate (validity window, SAN, key usage, basic constraints, key
-identifiers, AIA/CRL URLs, fingerprints, and the full `openssl x509 -text`
-dump for anything not broken out explicitly). It flags expired/not-yet-valid
-certificates *anywhere* in the chain (an expired intermediate is invisible
-if you only ever look at the leaf), an incomplete chain (an uploaded
-bundle whose top certificate's issuer wasn't included), and a
-hostname/SAN mismatch when an expected hostname is given. Chain trust is
-verified against the system CA store either way: live, via the same
-`openssl s_client` connection used to fetch the chain; offline, via
-`openssl verify -untrusted <chain>` against the pinned leaf. Independent
-of `cli_scripts/protocol_tester.py --check-chain` -- both solve overlapping
-problems by shelling out to `openssl`, but share no code, per the
-"drop-in-a-folder, no other code changes" spirit of `apps/`.
+`apps/cert-inspector/` ("Certificate Tools") is three certificate/key
+operations in one app, switched between via tabs:
+
+- **Inspect chain** is a certificate chain debugger: drag & drop a
+  certificate or a full exported chain bundle (or paste PEM text), or
+  point it at a live host/port instead, and it shows the *whole* chain --
+  not just the leaf, which is all a plain TLS connection ever exposes --
+  as a visual leaf-to-root diagram plus a detail card per certificate
+  (validity window, SAN, key usage, basic constraints, key identifiers,
+  AIA/CRL URLs, fingerprints, and the full `openssl x509 -text` dump for
+  anything not broken out explicitly). It flags expired/not-yet-valid
+  certificates *anywhere* in the chain (an expired intermediate is
+  invisible if you only ever look at the leaf), an incomplete chain (an
+  uploaded bundle whose top certificate's issuer wasn't included), and a
+  hostname/SAN mismatch when an expected hostname is given. Chain trust is
+  verified against the system CA store either way: live, via the same
+  `openssl s_client` connection used to fetch the chain; offline, via
+  `openssl verify -untrusted <chain>` against the pinned leaf.
+- **Decrypt private key** turns a password-protected RSA key (traditional
+  PKCS#1 *or* PKCS#8 -- e.g. the key a Mikrotik router exports for an
+  OpenVPN client config) back into a plain PEM.
+- **Merge key + cert → .pfx** bundles a private key with its certificate
+  (plus an optional intermediate/CA chain) into a single
+  password-protected PKCS#12 (`.pfx`) file -- the format Windows/IIS's
+  certificate import expects, instead of the three separate PEM files
+  OpenSSL normally hands you. Has a "legacy encryption" toggle (`openssl
+  pkcs12 -export -legacy`) for older Windows Server/IIS releases that fail
+  to import a modern OpenSSL-3-encrypted `.pfx` with no useful error
+  message.
+
+All three shell out to the system `openssl` -- chain inspection via
+`cert_inspector/parser.py` (same approach, but no shared code, as
+`cli_scripts/protocol_tester.py --check-chain`), key decrypt/merge via the
+separate `cert_inspector/keys.py`; passphrases always go in over stdin,
+never as a CLI argument.
 
 `apps/panos-filter-builder/` ("PAN-OS Filter Builder") builds a PAN-OS
 Traffic log filter (Monitor > Logs > Traffic) from multiple fields --
@@ -216,21 +233,6 @@ a layout with an AI -- the page's own Help panel has a ready-to-copy
 prompt describing the JSON schema and validation rules, so an AI given a
 description of an existing subnet layout can produce JSON this app will
 import directly.
-
-`apps/cert-tools/` ("Certificate Tools") covers two one-off key/cert
-operations that don't fit cert-inspector (which only ever reads, never
-produces a new file): decrypting a password-protected RSA private key
-(e.g. the key a Mikrotik router exports for an OpenVPN client config) back
-to a plain PEM, and merging a private key with its certificate (plus an
-optional intermediate/CA chain) into a single password-protected PKCS#12
-(`.pfx`) file -- the format Windows/IIS's certificate import expects,
-instead of the three separate PEM files OpenSSL normally hands you. Both
-operations shell out to the system `openssl` (`cert_tools/crypto.py`,
-independent of cert-inspector's own `openssl`-shelling parser); passphrases
-always go in over stdin, never as a CLI argument. The `.pfx` builder has a
-"legacy encryption" toggle (`openssl pkcs12 -export -legacy`) for older
-Windows Server/IIS releases that fail to import a modern OpenSSL-3-encrypted
-`.pfx` with no useful error message.
 
 ### Adding an app module
 
