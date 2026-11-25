@@ -17,12 +17,17 @@ WORKDIR /srv/toolbox
 #   intermediates) -- Python's own ssl module only ever exposes the leaf.
 #   Also used by cert-tools (chain parsing/verification, key decrypt,
 #   key+cert -> .pfx).
+# libatomic1: playwright's own bundled node driver (not the Chromium
+#   browser it drives) needs libatomic.so.1 just to run -- without it,
+#   `playwright install --with-deps chromium` below fails before it gets
+#   the chance to install Chromium's own dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     iputils-ping \
     traceroute \
     nmap \
     openssl \
+    libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
