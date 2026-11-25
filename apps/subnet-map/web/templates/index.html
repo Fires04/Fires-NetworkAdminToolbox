@@ -94,6 +94,34 @@
      known-shape values and don't need this. */
   .seg-tip-clamp { font-family: inherit; font-weight: 400; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 
+  /* persistent subnet-info panel -- click (not hover) opens this, and it
+     stays open until the X is clicked, unlike #seg-tip's hover-only
+     preview for free gaps. Needs pointer-events:auto (copy/close/open
+     buttons), so it's a separate element from #seg-tip rather than the
+     same one repurposed -- keeping #seg-tip's pointer-events:none avoids
+     the opened panel itself stealing hover from the gap segments under it. */
+  #seg-info {
+    display: none; position: fixed; z-index: 10000; pointer-events: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: .7rem .85rem; font-size: .85rem; width: 340px; max-width: calc(100vw - 16px);
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  .seg-tip-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem; margin-bottom: .5rem; }
+  .seg-tip-head .seg-tip-title { margin-bottom: 0; }
+  .seg-tip-close {
+    background: transparent; border: none; color: var(--muted); font-size: 1.2rem;
+    line-height: 1; cursor: pointer; padding: 0 .2rem; flex: 0 0 auto;
+  }
+  .seg-tip-close:hover { color: var(--text); }
+  .seg-tip-valrow { display: flex; align-items: flex-start; justify-content: space-between; gap: .4rem; }
+  .seg-tip-valrow b { flex: 1; min-width: 0; }
+  .seg-tip-copy {
+    flex: 0 0 auto; background: #2a2f36; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 5px; padding: .15rem .45rem; font-size: .78rem; line-height: 1.3; cursor: pointer;
+  }
+  .seg-tip-copy:hover { color: var(--text); }
+  .seg-tip-footer { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .7rem; }
+
   /* modal */
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 50; padding: 1rem; }
   .overlay.open { display: flex; }
@@ -136,10 +164,23 @@
   <div id="networks"></div>
 
   <div class="toolbar">
+    <button class="secondary" onclick="openShare()">Share link</button>
     <button class="secondary" onclick="openExport()">Export JSON</button>
     <button class="secondary" onclick="openImport()">Import JSON</button>
     <button class="danger" onclick="clearAll()">Clear all data</button>
   </div>
+
+  <details class="card" id="share-card">
+    <summary>Share link</summary>
+    <div class="details-body">
+      <p style="color:var(--muted); font-size:.85rem">
+        Encodes your current layout into the link itself (nothing is uploaded anywhere) -- anyone who
+        opens it is asked to load it, replacing their own data. Long layouts make a long link.
+      </p>
+      <textarea id="share-output" readonly></textarea>
+      <div class="copy-row"><button class="secondary" onclick="copyText(document.getElementById('share-output').value, this)">Copy link</button></div>
+    </div>
+  </details>
 
   <details class="card" id="help-card">
     <summary>Help &amp; AI import prompt</summary>
@@ -181,6 +222,7 @@
 </div>
 
 <div id="seg-tip"></div>
+<div id="seg-info"></div>
 
 <div class="overlay" id="modal-overlay">
   <div class="modal">
@@ -368,7 +410,7 @@ function placeInFirstFittingGap(gaps, prefix) {
 
 /* ---------------------------------------------------------------- rendering */
 function render() {
-  hideSegTip(); // a re-render can detach the segment the tooltip is anchored to without firing mouseleave
+  hideSegTip(); hideSegInfo(); // a re-render can detach the segment the tooltip/panel is anchored to without firing mouseleave/close
   const el = document.getElementById('networks');
   if (!state.networks.length) {
     el.innerHTML = '<p class="empty-hint">No networks yet -- add one above.</p>';
@@ -379,34 +421,10 @@ function render() {
   saveState();
 }
 
-/* ---------------------------------------------------------------- per-segment info tooltip */
+/* ---------------------------------------------------------------- per-segment info tooltip (free gaps, hover-only) */
 function tipRow(label, value, clamp) {
   const cls = clamp ? ' class="seg-tip-clamp"' : '';
   return '<div class="seg-tip-row"><span>' + esc(label) + '</span><b' + cls + '>' + esc(value) + '</b></div>';
-}
-function childInfoHtml(node) {
-  const p = cidrOf(node);
-  if (!p) return '';
-  const rows = [
-    tipRow('CIDR', fmtCidr(p.start, p.prefix)),
-    tipRow('Network address', intToIp(p.start)),
-    tipRow('Netmask', intToIp(p.mask)),
-    tipRow('Netmask (binary)', toBinaryDotted(p.mask)),
-    tipRow('Wildcard mask', intToIp((~p.mask) >>> 0)),
-    tipRow('Network size', p.size + ' addresses'),
-  ];
-  if (p.prefix <= 30) {
-    rows.push(tipRow('Usable range', intToIp(p.start + 1) + ' - ' + intToIp(p.end - 1)));
-    rows.push(tipRow('Usable hosts', String(p.size - 2)));
-    rows.push(tipRow('Broadcast', intToIp(p.end)));
-  } else if (p.prefix === 31) {
-    rows.push(tipRow('Usable (RFC3021)', intToIp(p.start) + ', ' + intToIp(p.end)));
-  } else {
-    rows.push(tipRow('Host', intToIp(p.start)));
-  }
-  rows.push(tipRow('IP class', ipClassOf((p.start >>> 24) & 255)));
-  if (node.note) rows.push(tipRow('Note', node.note, true));
-  return '<div class="seg-tip-title">' + esc(node.name) + '</div>' + rows.join('');
 }
 function gapInfoHtml(start, end) {
   const size = end - start + 1;
@@ -417,16 +435,9 @@ function gapInfoHtml(start, end) {
   ];
   return '<div class="seg-tip-title">Free space</div>' + rows.join('');
 }
-function showSegTip(event, kind, a, b) {
+function showSegTip(event, start, end) {
   const tip = document.getElementById('seg-tip');
-  if (kind === 'child') {
-    const network = findNetwork(a);
-    const node = network && findNodeById(network, b);
-    if (!node) return;
-    tip.innerHTML = childInfoHtml(node);
-  } else {
-    tip.innerHTML = gapInfoHtml(a, b);
-  }
+  tip.innerHTML = gapInfoHtml(start, end);
   tip.style.display = 'block';
   positionSegTip(event);
 }
@@ -453,6 +464,82 @@ function positionSegTip(event) {
   tip.style.maxHeight = Math.max(80, vh - top - 8) + 'px';
   tip.style.overflow = 'hidden';
 }
+function hideSegTip() {
+  const tip = document.getElementById('seg-tip');
+  if (tip) tip.style.display = 'none';
+}
+
+/* ---------------------------------------------------------------- per-segment info panel (allocated subnets, click-to-open) */
+function tipRowCopyable(label, value, clamp) {
+  const cls = clamp ? ' class="seg-tip-clamp"' : '';
+  return '<div class="seg-tip-row"><span>' + esc(label) + '</span>' +
+    '<div class="seg-tip-valrow"><b' + cls + '>' + esc(value) + '</b>' +
+    '<button type="button" class="seg-tip-copy" title="Copy" aria-label="Copy ' + esc(label) + '" onclick="copyRowValue(this)">⧉</button></div></div>';
+}
+function childInfoRows(node) {
+  const p = cidrOf(node);
+  if (!p) return '';
+  const rows = [
+    tipRowCopyable('CIDR', fmtCidr(p.start, p.prefix)),
+    tipRowCopyable('Network address', intToIp(p.start)),
+    tipRowCopyable('Netmask', intToIp(p.mask)),
+    tipRowCopyable('Netmask (binary)', toBinaryDotted(p.mask)),
+    tipRowCopyable('Wildcard mask', intToIp((~p.mask) >>> 0)),
+    tipRowCopyable('Network size', p.size + ' addresses'),
+  ];
+  if (p.prefix <= 30) {
+    rows.push(tipRowCopyable('Usable range', intToIp(p.start + 1) + ' - ' + intToIp(p.end - 1)));
+    rows.push(tipRowCopyable('Usable hosts', String(p.size - 2)));
+    rows.push(tipRowCopyable('Broadcast', intToIp(p.end)));
+  } else if (p.prefix === 31) {
+    rows.push(tipRowCopyable('Usable (RFC3021)', intToIp(p.start) + ', ' + intToIp(p.end)));
+  } else {
+    rows.push(tipRowCopyable('Host', intToIp(p.start)));
+  }
+  rows.push(tipRowCopyable('IP class', ipClassOf((p.start >>> 24) & 255)));
+  if (node.note) rows.push(tipRowCopyable('Note', node.note, true));
+  return rows.join('');
+}
+function showSegInfo(event, networkId, nodeId) {
+  const network = findNetwork(networkId);
+  const node = network && findNodeById(network, nodeId);
+  if (!node) return;
+  const info = document.getElementById('seg-info');
+  info.innerHTML =
+    '<div class="seg-tip-head"><div class="seg-tip-title">' + esc(node.name) + '</div>' +
+    '<button type="button" class="seg-tip-close" title="Close" aria-label="Close" onclick="hideSegInfo()">×</button></div>' +
+    childInfoRows(node) +
+    '<div class="seg-tip-footer">' +
+      '<button type="button" class="secondary" onclick="hideSegInfo()">Close</button>' +
+      '<button type="button" onclick="hideSegInfo();drillTo(\'' + networkId + '\',\'' + nodeId + '\')">Open subnet &rarr;</button>' +
+    '</div>';
+  info.style.display = 'block';
+  positionSegInfo(event);
+}
+function positionSegInfo(event) {
+  const info = document.getElementById('seg-info');
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const tw = info.offsetWidth || 340, th = info.offsetHeight || 260;
+  let left = event.clientX + 14, top = event.clientY + 14;
+  if (left + tw > vw - 8) left = event.clientX - tw - 14;
+  if (top + th > vh - 8) top = event.clientY - th - 14;
+  left = Math.max(8, Math.min(left, vw - tw - 8));
+  top = Math.max(topClampMin(), Math.min(top, vh - th - 8));
+  info.style.left = left + 'px';
+  info.style.top = top + 'px';
+  // Unlike #seg-tip, this panel is interactive (copy/open-subnet buttons
+  // can sit below the fold on a short viewport) -- scroll instead of clip.
+  info.style.maxHeight = Math.max(120, vh - top - 8) + 'px';
+  info.style.overflow = 'auto';
+}
+function hideSegInfo() {
+  const info = document.getElementById('seg-info');
+  if (info) info.style.display = 'none';
+}
+function copyRowValue(btn) {
+  const val = btn.previousElementSibling.textContent;
+  copyText(val, btn);
+}
 function topClampMin() {
   // The mounted-toolbox shell injects a sticky "<- PyFNetwork Toolbox"
   // banner across the top of <body> (webui/html_rewrite.py) -- don't let
@@ -467,10 +554,6 @@ function topClampMin() {
     if (bottom > 0) return bottom + 6;
   }
   return 8;
-}
-function hideSegTip() {
-  const tip = document.getElementById('seg-tip');
-  if (tip) tip.style.display = 'none';
 }
 
 function renderNetworkCard(network) {
@@ -509,14 +592,16 @@ function renderNetworkCard(network) {
     const grow = Math.max(size, 1);
     if (seg.type === 'gap') {
       return '<div class="seg seg-gap" style="flex-grow:' + grow + '"' +
-        ' onmouseenter="showSegTip(event,\'gap\',' + seg.p.start + ',' + seg.p.end + ')" onmouseleave="hideSegTip()"' +
+        ' onmouseenter="showSegTip(event,' + seg.p.start + ',' + seg.p.end + ')" onmouseleave="hideSegTip()"' +
         ' onclick="openAddModal(\'' + network.id + '\',\'' + current.id + '\',' + seg.p.start + ')">+</div>';
     }
     const c = seg.node;
     const color = c.color || PALETTE[0];
+    // Click opens the persistent info panel (stays open, copy icons per
+    // row, closed via its X) rather than drilling straight in -- drilling
+    // into the subnet is now the panel's own "Open subnet" button.
     return '<div class="seg seg-child" style="flex-grow:' + grow + ';background:' + esc(color) + '"' +
-      ' onmouseenter="showSegTip(event,\'child\',\'' + network.id + '\',\'' + c.id + '\')" onmouseleave="hideSegTip()"' +
-      ' onclick="drillTo(\'' + network.id + '\',\'' + c.id + '\')">' +
+      ' onclick="showSegInfo(event,\'' + network.id + '\',\'' + c.id + '\')">' +
       '<span class="seg-label">' + esc(c.name) + '</span></div>';
   }).join('');
 
@@ -860,6 +945,47 @@ function doImport() {
   document.getElementById('import-card').open = false;
   render();
 }
+/* ---------------------------------------------------------------- share link */
+// Base64url of the UTF-8 bytes (not btoa() directly -- that throws on any
+// non-Latin1 character, e.g. a Czech name/note with diacritics).
+function toBase64Url(str) {
+  const b64 = btoa(unescape(encodeURIComponent(str)));
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function fromBase64Url(b64url) {
+  let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  return decodeURIComponent(escape(atob(b64)));
+}
+function openShare() {
+  const encoded = toBase64Url(JSON.stringify(exportState()));
+  const url = location.origin + location.pathname + '#share=' + encoded;
+  document.getElementById('share-output').value = url;
+  document.getElementById('share-card').open = true;
+  document.getElementById('share-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function tryLoadSharedFromHash() {
+  const m = /^#share=(.+)$/.exec(location.hash);
+  if (!m) return;
+  // Strip the hash either way -- a reload (or sharing the now-current URL
+  // further) shouldn't re-trigger the load prompt.
+  history.replaceState(null, '', location.pathname + location.search);
+  let data;
+  try { data = JSON.parse(fromBase64Url(m[1])); } catch (e) {
+    alert('This share link looks corrupted or incomplete.'); return;
+  }
+  if (!data || !Array.isArray(data.networks)) {
+    alert('This share link looks corrupted or incomplete.'); return;
+  }
+  const errors = [];
+  data.networks.forEach((n, i) => validateImportNode(n, null, [], 'networks[' + i + ']', errors));
+  if (errors.length) { alert('This share link looks corrupted or incomplete:\n' + errors.join('\n')); return; }
+  if (state.networks.length && !confirm('Load the shared network layout? This replaces your current data (' + state.networks.length + ' network(s)). This cannot be undone.')) return;
+  data.networks.forEach(assignIds);
+  state = { version: 1, networks: data.networks };
+  Object.keys(drillPaths).forEach(k => delete drillPaths[k]);
+  render();
+}
 function clearAll() {
   if (!confirm('Delete all networks and subnets? This cannot be undone.')) return;
   state = { version: 1, networks: [] };
@@ -915,6 +1041,7 @@ document.getElementById('ai-prompt').textContent =
 '<describe your subnets here -- sizes, purposes, which ones sit inside which, etc.>';
 
 render();
+tryLoadSharedFromHash();
 </script>
 </body>
 </html>
